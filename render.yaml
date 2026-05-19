@@ -19,3 +19,12 @@ services:
         value: /data/mentoring.db
       - key: SYNC_GLOBALLY
         value: false
+      # Onboarding
+      - key: STUDENT_ROLE_ID
+        value: "1503760182281244743"
+      - key: ONBOARDING_CHANNEL_ID
+        sync: false
+      - key: INTRO_CHANNEL_ID
+        sync: false
+      - key: ONBOARDING_COMPLETE_ROLE_ID
+        sync: false

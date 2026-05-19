@@ -60,6 +60,14 @@ async def init_db() -> None:
                 sent_at    TEXT    NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(booking_id, type)
             );
+
+            CREATE TABLE IF NOT EXISTS onboarding_progress (
+                user_id      TEXT PRIMARY KEY,
+                guild_id     TEXT NOT NULL,
+                joined_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                intro_done   INTEGER NOT NULL DEFAULT 0,
+                completed_at TEXT
+            );
         """)
         await db.commit()
         # Migration: add status / rejection_reason columns if missing
@@ -529,3 +537,56 @@ async def mark_reminder_sent(booking_id: int, reminder_type: str) -> None:
             await db.commit()
     except aiosqlite.IntegrityError:
         pass  # already marked
+
+
+# ── Onboarding helpers ─────────────────────────────────────────────────────
+
+async def create_onboarding(user_id: str, guild_id: str) -> None:
+    """Record that a new member has joined (idempotent)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO onboarding_progress (user_id, guild_id)
+            VALUES (?, ?)
+            ON CONFLICT(user_id) DO NOTHING
+            """,
+            (user_id, guild_id),
+        )
+        await db.commit()
+
+
+async def complete_onboarding(user_id: str) -> bool:
+    """
+    Mark self-intro as done. Returns True if this is the first time
+    (i.e., the row existed and intro_done was 0).
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT intro_done FROM onboarding_progress WHERE user_id = ?",
+            (user_id,),
+        ) as cur:
+            row = await cur.fetchone()
+
+        if not row or row[0]:
+            return False  # not found or already completed
+
+        await db.execute(
+            """
+            UPDATE onboarding_progress
+            SET intro_done = 1, completed_at = datetime('now')
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        await db.commit()
+        return True
+
+
+async def get_onboarding(user_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM onboarding_progress WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
