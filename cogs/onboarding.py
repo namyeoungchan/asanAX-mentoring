@@ -176,12 +176,19 @@ async def _process_intro(
         embed.set_footer(text="아산 AX · 자기소개")
         await intro_ch.send(embed=embed)
 
-    # 2. Mark DB complete; if already done skip role grant
+    # 2. Set nickname to 실명_팀명
+    new_nick = f"{name}_{team}"[:32]  # Discord nickname max length is 32
+    try:
+        await member.edit(nick=new_nick, reason="온보딩 자기소개 제출 — 닉네임 자동 설정")
+    except discord.Forbidden:
+        log.warning("Could not change nickname for %s — missing permissions or server owner", member)
+
+    # 3. Mark DB complete; if already done skip role grant
     first_time = await database.complete_onboarding(str(member.id))
     if not first_time:
         return
 
-    # 3. Grant onboarding-complete role
+    # 4. Grant onboarding-complete role
     if config.ONBOARDING_COMPLETE_ROLE_ID:
         role = guild.get_role(config.ONBOARDING_COMPLETE_ROLE_ID)
         if role:
