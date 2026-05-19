@@ -125,17 +125,29 @@ class QA(commands.Cog):
                 except discord.Forbidden:
                     log.warning("Cannot add tag to thread %s", thread.id)
 
-        # Post the resolve button
-        await thread.send(
-            embed=discord.Embed(
-                description=(
-                    "질문이 해결되면 아래 버튼을 눌러주세요.\n"
-                    "운영진이 최대한 빠르게 답변 드리겠습니다! 💬"
-                ),
-                color=discord.Color.from_str("#2B5CE6"),
+        # Post template + resolve button
+        template_embed = discord.Embed(
+            title="📋 질문 작성 템플릿",
+            description=(
+                "아래 양식을 참고해 내용을 보충하면 더 빠른 답변을 받을 수 있어요!\n\n"
+                "```\n"
+                "사용 중인 Tool  :\n"
+                "현재 상태      :\n"
+                "발생 문제      :\n"
+                "시도해본 것    :\n"
+                "도움 필요한 부분:\n"
+                "```"
             ),
-            view=ResolvedView(),
+            color=discord.Color.from_str("#2B5CE6"),
         )
+        template_embed.set_footer(text="좋은 질문은 팀의 성장 속도를 높입니다 🚀")
+
+        resolve_embed = discord.Embed(
+            description="질문이 해결되면 아래 버튼을 눌러주세요. 운영진이 최대한 빠르게 답변 드리겠습니다! 💬",
+            color=discord.Color.blurple(),
+        )
+
+        await thread.send(embeds=[template_embed, resolve_embed], view=ResolvedView())
 
     # ── Unanswered alert task ─────────────────────────────────────────────────
 
