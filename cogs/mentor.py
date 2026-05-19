@@ -128,7 +128,7 @@ class MentorSelf(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    mentor_group = app_commands.Group(name="mentor", description="멘토 전용 명령어")
+    mentor_group = app_commands.Group(name="멘토", description="멘토 전용 명령어")
 
     async def _resolve_mentor(self, interaction: discord.Interaction) -> dict | None:
         mentor = await _get_mentor(str(interaction.user.id))
