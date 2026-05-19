@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: asanax-mentoring-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    disk:
+      name: bot-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: GUILD_ID
+        sync: false
+      - key: ADMIN_ROLE_ID
+        sync: false
+      - key: DB_PATH
+        value: /data/mentoring.db
+      - key: SYNC_GLOBALLY
+        value: false
