@@ -309,3 +309,35 @@ def booking_success_embed(slot: dict, mentor: dict) -> discord.Embed:
 
 def error_embed(message: str) -> discord.Embed:
     return discord.Embed(title="오류", description=message, color=ERROR_COLOR)
+
+
+# ── Reminder embeds ───────────────────────────────────────────────────────────
+
+def reminder_embed(booking: dict, reminder_type: str, for_mentor: bool = False) -> discord.Embed:
+    label = booking["label"]
+    name = booking["mentor_name"] if not for_mentor else booking["user_name"]
+
+    titles = {
+        "day_before": "📅 멘토링 세션 하루 전 알림",
+        "day_of":     "☀️ 멘토링 세션 당일 알림",
+        "hour_before": "⏰ 멘토링 세션 1시간 전 알림",
+    }
+    descs = {
+        "day_before": "내일 멘토링 세션이 있습니다. 잊지 마세요!",
+        "day_of":     "오늘 멘토링 세션이 있습니다. 준비하세요!",
+        "hour_before": "1시간 후 멘토링 세션이 시작됩니다!",
+    }
+
+    embed = discord.Embed(
+        title=titles.get(reminder_type, "멘토링 알림"),
+        description=descs.get(reminder_type, ""),
+        color=BRAND_COLOR,
+    )
+    embed.add_field(
+        name="멘토" if not for_mentor else "신청자",
+        value=name,
+        inline=True,
+    )
+    embed.add_field(name="시간", value=label, inline=True)
+    embed.set_footer(text="아산 AX 멘토링")
+    return embed

@@ -52,6 +52,14 @@ async def init_db() -> None:
                 date      TEXT    NOT NULL,
                 UNIQUE(mentor_id, date)
             );
+
+            CREATE TABLE IF NOT EXISTS reminders (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+                type       TEXT    NOT NULL,
+                sent_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(booking_id, type)
+            );
         """)
         await db.commit()
         # Migration: add status / rejection_reason columns if missing
@@ -434,3 +442,44 @@ async def is_date_blocked(mentor_id: int, date: str) -> bool:
             (mentor_id, date),
         ) as cur:
             return await cur.fetchone() is not None
+
+
+# ── Reminder helpers ──────────────────────────────────────────────────────────
+
+async def get_approved_bookings_for_reminder() -> list[dict]:
+    """Returns all approved bookings with slot + mentor info for future sessions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT b.id AS booking_id, b.user_id, b.user_name,
+                      s.label, s.start_time, s.end_time,
+                      m.id AS mentor_id, m.name AS mentor_name, m.discord_id AS mentor_discord_id
+               FROM bookings b
+               JOIN slots s ON b.slot_id = s.id
+               JOIN mentors m ON s.mentor_id = m.id
+               WHERE b.status = 'approved'
+                 AND s.start_time > datetime('now')
+               ORDER BY s.start_time"""
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def is_reminder_sent(booking_id: int, reminder_type: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM reminders WHERE booking_id = ? AND type = ?",
+            (booking_id, reminder_type),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def mark_reminder_sent(booking_id: int, reminder_type: str) -> None:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO reminders (booking_id, type) VALUES (?, ?)",
+                (booking_id, reminder_type),
+            )
+            await db.commit()
+    except aiosqlite.IntegrityError:
+        pass  # already marked

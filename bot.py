@@ -20,6 +20,7 @@ COGS = [
     "cogs.booking",
     "cogs.admin",
     "cogs.mentor",
+    "cogs.reminder",
 ]
 
 
