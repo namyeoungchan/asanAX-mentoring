@@ -1,7 +1,6 @@
 import discord
 import database
 from ui import embeds
-from ui.mentor_panel import MentorPanelView, build_panel_embed
 
 
 class BookingConfirmView(discord.ui.View):
