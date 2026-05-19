@@ -58,23 +58,22 @@ class SlotSelectView(discord.ui.View):
         slot_id = int(value)
         slot = await database.get_slot(slot_id)
         if not slot:
-            await interaction.response.send_message(
-                embed=embeds.error_embed("슬롯 정보를 찾을 수 없습니다."), ephemeral=True
+            await interaction.response.edit_message(
+                embed=embeds.error_embed("슬롯 정보를 찾을 수 없습니다."), view=None
             )
             return
 
         # Final availability check before showing confirm view
         existing = await database.get_booking_for_slot(slot_id)
         if existing:
-            await interaction.response.send_message(
-                embed=embeds.booking_taken_embed(), ephemeral=True
+            await interaction.response.edit_message(
+                embed=embeds.booking_taken_embed(), view=None
             )
             return
 
-        await interaction.response.send_message(
+        await interaction.response.edit_message(
             embed=embeds.booking_confirm_embed(slot, self.mentor),
             view=BookingConfirmView(slot, self.mentor),
-            ephemeral=True,
         )
 
     async def _prev_page(self, interaction: discord.Interaction) -> None:

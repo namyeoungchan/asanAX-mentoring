@@ -33,15 +33,31 @@ class MentorPanelView(discord.ui.View):
 
     def _make_callback(self, mentor: dict):
         async def callback(interaction: discord.Interaction) -> None:
-            slots = await database.get_slots_for_mentor(mentor["id"], active_only=True)
-            slot_ids = [s["id"] for s in slots]
-            bookings_map = await database.get_bookings_by_slot_ids(slot_ids)
+            try:
+                # Re-fetch mentor in case data changed after bot restart
+                fresh_mentor = await database.get_mentor_by_id(mentor["id"])
+                if not fresh_mentor:
+                    await interaction.response.send_message(
+                        embed=embeds.error_embed("멘토 정보를 찾을 수 없습니다. 관리자에게 문의하세요."),
+                        ephemeral=True,
+                    )
+                    return
 
-            await interaction.response.send_message(
-                embed=embeds.slot_list_embed(mentor, slots, bookings_map),
-                view=SlotSelectView(mentor, slots, bookings_map),
-                ephemeral=True,
-            )
+                slots = await database.get_slots_for_mentor(fresh_mentor["id"], active_only=True)
+                slot_ids = [s["id"] for s in slots]
+                bookings_map = await database.get_bookings_by_slot_ids(slot_ids)
+
+                await interaction.response.send_message(
+                    embed=embeds.slot_list_embed(fresh_mentor, slots, bookings_map),
+                    view=SlotSelectView(fresh_mentor, slots, bookings_map),
+                    ephemeral=True,
+                )
+            except Exception as e:
+                msg = f"오류가 발생했습니다: {e}"
+                if interaction.response.is_done():
+                    await interaction.followup.send(embed=embeds.error_embed(msg), ephemeral=True)
+                else:
+                    await interaction.response.send_message(embed=embeds.error_embed(msg), ephemeral=True)
 
         return callback
 
