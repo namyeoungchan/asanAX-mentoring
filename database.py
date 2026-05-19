@@ -54,6 +54,23 @@ async def init_db() -> None:
             );
         """)
         await db.commit()
+        # Migration: add status / rejection_reason columns if missing
+        await _migrate(db)
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    async with db.execute("PRAGMA table_info(bookings)") as cur:
+        columns = {row[1] for row in await cur.fetchall()}
+    if "status" not in columns:
+        # existing rows → 'approved' (they were already booked)
+        await db.execute(
+            "ALTER TABLE bookings ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"
+        )
+    if "rejection_reason" not in columns:
+        await db.execute(
+            "ALTER TABLE bookings ADD COLUMN rejection_reason TEXT DEFAULT ''"
+        )
+    await db.commit()
 
 
 # ── Mentor helpers ──────────────────────────────────────────────────────────
@@ -146,24 +163,26 @@ async def deactivate_slot(slot_id: int) -> bool:
 # ── Booking helpers ─────────────────────────────────────────────────────────
 
 async def get_booking_for_slot(slot_id: int) -> dict | None:
+    """Returns active (pending or approved) booking for a slot."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM bookings WHERE slot_id = ?", (slot_id,)
+            "SELECT * FROM bookings WHERE slot_id = ? AND status IN ('pending', 'approved')",
+            (slot_id,),
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
 
 async def get_booking_by_user(user_id: str) -> dict | None:
-    """Returns the most recent active booking for the user."""
+    """Returns the most recent pending/approved booking for the user."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT b.*, s.label, s.start_time, s.end_time, s.mentor_id
                FROM bookings b
                JOIN slots s ON b.slot_id = s.id
-               WHERE b.user_id = ?
+               WHERE b.user_id = ? AND b.status IN ('pending', 'approved')
                ORDER BY b.booked_at DESC
                LIMIT 1""",
             (user_id,),
@@ -191,17 +210,51 @@ async def get_all_bookings(mentor_id: int | None = None) -> list[dict]:
 
 
 async def create_booking(slot_id: int, user_id: str, user_name: str) -> bool:
-    """Returns True on success, False if the slot is already booked."""
+    """Creates a pending booking. Returns True on success, False if slot already taken."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
-                "INSERT INTO bookings (slot_id, user_id, user_name) VALUES (?, ?, ?)",
+                "INSERT INTO bookings (slot_id, user_id, user_name, status) VALUES (?, ?, ?, 'pending')",
                 (slot_id, user_id, user_name),
             )
             await db.commit()
         return True
     except aiosqlite.IntegrityError:
         return False
+
+
+async def approve_booking(slot_id: int) -> dict | None:
+    """Approves a pending booking. Returns booking row or None if not found."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM bookings WHERE slot_id = ? AND status = 'pending'", (slot_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        booking = dict(row)
+        await db.execute(
+            "UPDATE bookings SET status = 'approved' WHERE slot_id = ?", (slot_id,)
+        )
+        await db.commit()
+    return booking
+
+
+async def reject_booking(slot_id: int, reason: str = "") -> dict | None:
+    """Rejects and deletes a booking. Returns deleted booking row or None."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM bookings WHERE slot_id = ?", (slot_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        booking = dict(row)
+        await db.execute("DELETE FROM bookings WHERE slot_id = ?", (slot_id,))
+        await db.commit()
+    return booking
 
 
 async def cancel_booking(slot_id: int, user_id: str) -> bool:
@@ -225,17 +278,56 @@ async def admin_cancel_booking(slot_id: int) -> bool:
 
 
 async def get_bookings_by_slot_ids(slot_ids: list[int]) -> dict[int, dict]:
-    """Returns a mapping of slot_id -> booking row for a list of slot IDs."""
+    """Returns a mapping of slot_id -> booking row (pending/approved only)."""
     if not slot_ids:
         return {}
     placeholders = ",".join("?" * len(slot_ids))
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            f"SELECT * FROM bookings WHERE slot_id IN ({placeholders})", slot_ids
+            f"SELECT * FROM bookings WHERE slot_id IN ({placeholders})"
+            f" AND status IN ('pending','approved')",
+            slot_ids,
         ) as cur:
             rows = await cur.fetchall()
     return {row["slot_id"]: dict(row) for row in rows}
+
+
+async def get_dates_with_available_slots(mentor_id: int) -> list[str]:
+    """Returns YYYY-MM-DD dates that have at least one bookable slot."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """SELECT DISTINCT substr(start_time, 1, 10) AS date
+               FROM slots
+               WHERE mentor_id = ? AND is_active = 1
+                 AND id NOT IN (
+                     SELECT slot_id FROM bookings
+                     WHERE status IN ('pending','approved')
+                 )
+               ORDER BY date""",
+            (mentor_id,),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+
+async def get_slots_for_mentor_date(mentor_id: int, date: str) -> list[dict]:
+    """Returns all active slots for mentor on date, with booking status attached."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT s.*,
+                      b.status     AS booking_status,
+                      b.user_name  AS booked_by,
+                      b.user_id    AS booked_user_id
+               FROM slots s
+               LEFT JOIN bookings b
+                 ON s.id = b.slot_id AND b.status IN ('pending','approved')
+               WHERE s.mentor_id = ? AND s.is_active = 1
+                 AND substr(s.start_time, 1, 10) = ?
+               ORDER BY s.start_time""",
+            (mentor_id, date),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
 
 # ── Panel helpers ────────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ Each button opens an ephemeral slot-select flow for that mentor.
 import discord
 import database
 from ui import embeds
-from ui.slot_select import SlotSelectView
+from ui.date_select import DateSelectView
 
 
 def _chunk(lst: list, size: int) -> list[list]:
@@ -43,13 +43,10 @@ class MentorPanelView(discord.ui.View):
                     )
                     return
 
-                slots = await database.get_slots_for_mentor(fresh_mentor["id"], active_only=True)
-                slot_ids = [s["id"] for s in slots]
-                bookings_map = await database.get_bookings_by_slot_ids(slot_ids)
-
+                dates = await database.get_dates_with_available_slots(fresh_mentor["id"])
                 await interaction.response.send_message(
-                    embed=embeds.slot_list_embed(fresh_mentor, slots, bookings_map),
-                    view=SlotSelectView(fresh_mentor, slots, bookings_map),
+                    embed=embeds.date_select_embed(fresh_mentor, dates),
+                    view=DateSelectView(fresh_mentor, dates),
                     ephemeral=True,
                 )
             except Exception as e:

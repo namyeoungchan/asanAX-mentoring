@@ -4,15 +4,13 @@ from discord.ext import commands
 
 import database
 from ui import embeds
-from ui.slot_select import SlotSelectView
+from ui.date_select import DateSelectView
 from ui.confirm_view import CancelConfirmView
 
 
 class Booking(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
-
-    # ── Autocomplete ──────────────────────────────────────────────────────
 
     async def _mentor_autocomplete(
         self, interaction: discord.Interaction, current: str
@@ -35,21 +33,21 @@ class Booking(commands.Cog):
             embed=embeds.mentor_list_embed(mentors), ephemeral=True
         )
 
-    @mentor_group.command(name="slots", description="특정 멘토의 예약 가능 시간을 확인합니다.")
+    @mentor_group.command(name="slots", description="특정 멘토의 예약 가능 날짜를 확인합니다.")
     @app_commands.describe(mentor="멘토 이름")
     @app_commands.autocomplete(mentor=_mentor_autocomplete)
     async def mentor_slots(self, interaction: discord.Interaction, mentor: str) -> None:
-        await self._show_slots(interaction, mentor)
+        await self._open_date_select(interaction, mentor)
 
     # ── /book ─────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="book", description="멘토링 세션을 예약합니다.")
-    @app_commands.describe(mentor="예약할 멘토")
+    @app_commands.command(name="book", description="멘토링 세션을 신청합니다.")
+    @app_commands.describe(mentor="신청할 멘토")
     @app_commands.autocomplete(mentor=_mentor_autocomplete)
     async def book(self, interaction: discord.Interaction, mentor: str) -> None:
-        await self._show_slots(interaction, mentor)
+        await self._open_date_select(interaction, mentor)
 
-    async def _show_slots(self, interaction: discord.Interaction, mentor_id_str: str) -> None:
+    async def _open_date_select(self, interaction: discord.Interaction, mentor_id_str: str) -> None:
         try:
             mentor_id = int(mentor_id_str)
         except ValueError:
@@ -65,19 +63,16 @@ class Booking(commands.Cog):
             )
             return
 
-        slots = await database.get_slots_for_mentor(mentor_id, active_only=True)
-        slot_ids = [s["id"] for s in slots]
-        bookings_map = await database.get_bookings_by_slot_ids(slot_ids)
-
+        dates = await database.get_dates_with_available_slots(mentor_id)
         await interaction.response.send_message(
-            embed=embeds.slot_list_embed(mentor, slots, bookings_map),
-            view=SlotSelectView(mentor, slots, bookings_map),
+            embed=embeds.date_select_embed(mentor, dates),
+            view=DateSelectView(mentor, dates),
             ephemeral=True,
         )
 
     # ── /mybooking ────────────────────────────────────────────────────────
 
-    @app_commands.command(name="mybooking", description="내 멘토링 예약을 확인합니다.")
+    @app_commands.command(name="mybooking", description="내 멘토링 신청 현황을 확인합니다.")
     async def my_booking(self, interaction: discord.Interaction) -> None:
         booking = await database.get_booking_by_user(str(interaction.user.id))
         if not booking:
@@ -92,7 +87,7 @@ class Booking(commands.Cog):
 
     # ── /cancel ───────────────────────────────────────────────────────────
 
-    @app_commands.command(name="cancel", description="내 멘토링 예약을 취소합니다.")
+    @app_commands.command(name="cancel", description="내 멘토링 신청을 취소합니다.")
     async def cancel(self, interaction: discord.Interaction) -> None:
         booking = await database.get_booking_by_user(str(interaction.user.id))
         if not booking:
