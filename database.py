@@ -464,6 +464,52 @@ async def get_approved_bookings_for_reminder() -> list[dict]:
             return [dict(r) for r in await cur.fetchall()]
 
 
+async def generate_slots_for_range(
+    mentor_id: int, date_from, date_to
+) -> tuple[int, int]:
+    """Generate slots from template for a date range.
+    Returns (created_count, skipped_blocked_count).
+    Requires slot_template to exist for mentor_id.
+    """
+    from datetime import date as date_type_inner, timedelta
+
+    WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+    template = await get_slot_template(mentor_id)
+    if not template:
+        return 0, 0
+
+    interval = template["interval_minutes"]
+    created = skipped = 0
+    current = date_from
+
+    while current <= date_to:
+        if await is_date_blocked(mentor_id, current.isoformat()):
+            skipped += 1
+            current += timedelta(days=1)
+            continue
+
+        cur_h, cur_m = template["start_hour"], template["start_minute"]
+        end_h, end_m = template["end_hour"], template["end_minute"]
+
+        while (cur_h * 60 + cur_m) + interval <= end_h * 60 + end_m:
+            next_total = cur_h * 60 + cur_m + interval
+            next_h, next_m = divmod(next_total, 60)
+
+            start_iso = f"{current.isoformat()}T{cur_h:02d}:{cur_m:02d}:00"
+            end_iso = f"{current.isoformat()}T{next_h:02d}:{next_m:02d}:00"
+            label = (
+                f"{current.month}/{current.day} ({WEEKDAYS[current.weekday()]}) "
+                f"{cur_h:02d}:{cur_m:02d}~{next_h:02d}:{next_m:02d}"
+            )
+            await add_slot(mentor_id, start_iso, end_iso, label)
+            created += 1
+            cur_h, cur_m = next_h, next_m
+
+        current += timedelta(days=1)
+
+    return created, skipped
+
+
 async def is_reminder_sent(booking_id: int, reminder_type: str) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(

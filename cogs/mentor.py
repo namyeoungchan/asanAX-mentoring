@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 import database
+from ui.mentor_setup import MentorSetupView, build_setup_embed
 
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -142,6 +143,21 @@ class MentorSelf(commands.Cog):
                 ephemeral=True,
             )
         return mentor
+
+    # ── /멘토 설정 ───────────────────────────────────────────────────────────
+
+    @mentor_group.command(name="설정", description="시간대 설정, 슬롯 생성, 예약 불가일을 관리합니다. (멘토 전용)")
+    async def setup_panel(self, interaction: discord.Interaction) -> None:
+        mentor = await self._resolve_mentor(interaction)
+        if not mentor:
+            return
+        template = await database.get_slot_template(mentor["id"])
+        embed = await build_setup_embed(mentor, template)
+        await interaction.response.send_message(
+            embed=embed,
+            view=MentorSetupView(mentor, template, self.bot),
+            ephemeral=True,
+        )
 
     # ── /mentor block ─────────────────────────────────────────────────────
 
