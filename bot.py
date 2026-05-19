@@ -22,6 +22,7 @@ COGS = [
     "cogs.mentor",
     "cogs.reminder",
     "cogs.onboarding",
+    "cogs.qa",
 ]
 
 

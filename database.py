@@ -61,6 +61,11 @@ async def init_db() -> None:
                 UNIQUE(booking_id, type)
             );
 
+            CREATE TABLE IF NOT EXISTS qa_alerts (
+                thread_id  TEXT PRIMARY KEY,
+                alerted_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS onboarding_progress (
                 user_id      TEXT PRIMARY KEY,
                 guild_id     TEXT NOT NULL,
@@ -580,6 +585,22 @@ async def complete_onboarding(user_id: str) -> bool:
         )
         await db.commit()
         return True
+
+
+async def is_qa_alerted(thread_id: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM qa_alerts WHERE thread_id = ?", (thread_id,)
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def mark_qa_alerted(thread_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO qa_alerts (thread_id) VALUES (?)", (thread_id,)
+        )
+        await db.commit()
 
 
 async def get_onboarding(user_id: str) -> dict | None:

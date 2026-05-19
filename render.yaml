@@ -28,3 +28,8 @@ services:
         sync: false
       - key: ONBOARDING_COMPLETE_ROLE_ID
         sync: false
+      # Q&A Forum
+      - key: QA_FORUM_CHANNEL_ID
+        value: "1506313964848676966"
+      - key: QA_UNANSWERED_HOURS
+        value: "24"
