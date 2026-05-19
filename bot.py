@@ -29,6 +29,8 @@ COGS = [
 class AsanAXBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
+        intents.members = True          # on_member_join (onboarding)
+        intents.message_content = True  # on_message (self-intro detection)
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self) -> None:
