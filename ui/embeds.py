@@ -51,7 +51,15 @@ def slot_list_embed(
             icon = "🟢"
         lines.append(f"{icon} `[{s['id']}]` **{s['label']}** — {status}")
 
-    embed.description = "\n".join(lines)
+    # Discord embed description limit: 4096 chars
+    description = ""
+    for line in lines:
+        if len(description) + len(line) + 1 > 4000:
+            description += "\n*... 슬롯이 너무 많아 일부만 표시됩니다. 메뉴에서 선택하세요.*"
+            break
+        description += line + "\n"
+
+    embed.description = description.strip()
     embed.set_footer(text="아래 메뉴에서 슬롯을 선택하세요 · 아산 AX 멘토링")
     return embed
 
