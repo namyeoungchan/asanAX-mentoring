@@ -519,6 +519,48 @@ class Admin(commands.Cog):
             ephemeral=True,
         )
 
+    # ── /admin onboarding-test ────────────────────────────────────────────
+
+    @admin_group.command(
+        name="onboarding-test",
+        description="특정 멤버에게 온보딩 플로우를 강제 실행합니다. (테스트용)",
+    )
+    @app_commands.describe(member="온보딩을 테스트할 멤버")
+    @is_admin()
+    async def onboarding_test(
+        self, interaction: discord.Interaction, member: discord.Member
+    ) -> None:
+        from cogs.onboarding import Onboarding
+
+        cog: Onboarding | None = self.bot.get_cog("Onboarding")  # type: ignore[assignment]
+        if not cog:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("Onboarding cog이 로드되지 않았습니다."), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Reset DB state so the test can run cleanly
+        import aiosqlite
+        from config import DB_PATH
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "DELETE FROM onboarding_progress WHERE user_id = ?", (str(member.id),)
+            )
+            await db.commit()
+
+        await cog.on_member_join(member)
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="✅ 온보딩 테스트 실행",
+                description=f"{member.mention} 에게 온보딩 플로우를 실행했습니다.\n`#온보딩` 채널을 확인하세요.",
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Admin(bot))
