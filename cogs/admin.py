@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import discord
 from discord import app_commands
@@ -320,6 +320,172 @@ class Admin(commands.Cog):
             embed.description = "\n".join(lines)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /admin schedule-set ───────────────────────────────────────────────
+
+    @admin_group.command(name="schedule-set", description="멘토의 기본 예약 시간대를 설정합니다.")
+    @app_commands.describe(
+        mentor="설정할 멘토",
+        start="시작 시간 (HH:MM, 기본 19:00)",
+        end="종료 시간 (HH:MM, 기본 21:00)",
+        interval="슬롯 간격(분, 기본 30)",
+    )
+    @app_commands.autocomplete(mentor=_mentor_autocomplete)
+    @is_admin()
+    async def schedule_set(
+        self,
+        interaction: discord.Interaction,
+        mentor: str,
+        start: str = "19:00",
+        end: str = "21:00",
+        interval: int = 30,
+    ) -> None:
+        try:
+            mentor_id = int(mentor)
+        except ValueError:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("올바른 멘토를 선택해주세요."), ephemeral=True
+            )
+            return
+
+        mentor_obj = await database.get_mentor_by_id(mentor_id)
+        if not mentor_obj:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("멘토를 찾을 수 없습니다."), ephemeral=True
+            )
+            return
+
+        try:
+            sh, sm = map(int, start.split(":"))
+            eh, em = map(int, end.split(":"))
+        except ValueError:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("시간 형식이 올바르지 않습니다. 예: `19:00`"), ephemeral=True
+            )
+            return
+
+        await database.set_slot_template(mentor_id, sh, sm, eh, em, interval)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="스케줄 설정 완료",
+                description=(
+                    f"**{mentor_obj['name']}** 멘토 기본 시간대 설정됨\n"
+                    f"⏰ {start} ~ {end} / {interval}분 단위\n\n"
+                    "`/admin slots-generate` 로 날짜 범위에 슬롯을 생성하세요."
+                ),
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+
+    # ── /admin slots-generate ─────────────────────────────────────────────
+
+    @admin_group.command(name="slots-generate", description="날짜 범위에 슬롯을 자동 생성합니다.")
+    @app_commands.describe(
+        mentor="슬롯을 생성할 멘토",
+        date_from="시작일 (YYYY-MM-DD)",
+        date_to="종료일 (YYYY-MM-DD)",
+    )
+    @app_commands.autocomplete(mentor=_mentor_autocomplete)
+    @is_admin()
+    async def slots_generate(
+        self,
+        interaction: discord.Interaction,
+        mentor: str,
+        date_from: str,
+        date_to: str,
+    ) -> None:
+        try:
+            mentor_id = int(mentor)
+        except ValueError:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("올바른 멘토를 선택해주세요."), ephemeral=True
+            )
+            return
+
+        mentor_obj = await database.get_mentor_by_id(mentor_id)
+        if not mentor_obj:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("멘토를 찾을 수 없습니다."), ephemeral=True
+            )
+            return
+
+        template = await database.get_slot_template(mentor_id)
+        if not template:
+            await interaction.response.send_message(
+                embed=embeds.error_embed(
+                    "스케줄 템플릿이 없습니다. 먼저 `/admin schedule-set` 으로 시간대를 설정하세요."
+                ),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            d_from = date.fromisoformat(date_from)
+            d_to = date.fromisoformat(date_to)
+        except ValueError:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("날짜 형식이 올바르지 않습니다. 예: `2026-05-30`"), ephemeral=True
+            )
+            return
+
+        if d_to < d_from:
+            await interaction.response.send_message(
+                embed=embeds.error_embed("종료일이 시작일보다 앞입니다."), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+        interval = template["interval_minutes"]
+        created = 0
+        skipped_blocked = 0
+
+        current = d_from
+        while current <= d_to:
+            if await database.is_date_blocked(mentor_id, current.isoformat()):
+                skipped_blocked += 1
+                current += timedelta(days=1)
+                continue
+
+            # Generate time slots for this day
+            cur_h = template["start_hour"]
+            cur_m = template["start_minute"]
+            end_h = template["end_hour"]
+            end_m = template["end_minute"]
+
+            while (cur_h * 60 + cur_m) + interval <= end_h * 60 + end_m:
+                next_total = cur_h * 60 + cur_m + interval
+                next_h, next_m = divmod(next_total, 60)
+
+                start_iso = f"{current.isoformat()}T{cur_h:02d}:{cur_m:02d}:00"
+                end_iso = f"{current.isoformat()}T{next_h:02d}:{next_m:02d}:00"
+                label = (
+                    f"{current.month}/{current.day} ({WEEKDAYS[current.weekday()]}) "
+                    f"{cur_h:02d}:{cur_m:02d}~{next_h:02d}:{next_m:02d}"
+                )
+
+                await database.add_slot(mentor_id, start_iso, end_iso, label)
+                created += 1
+
+                cur_h, cur_m = next_h, next_m
+
+            current += timedelta(days=1)
+
+        desc_lines = [f"✅ 생성된 슬롯: **{created}개**"]
+        if skipped_blocked:
+            desc_lines.append(f"🚫 예약 불가일로 건너뜀: **{skipped_blocked}일**")
+
+        await interaction.followup.send(
+            embed=discord.Embed(
+                title="슬롯 자동 생성 완료",
+                description="\n".join(desc_lines),
+                color=discord.Color.green(),
+            ),
+            ephemeral=True,
+        )
+        await refresh_all_panels(self.bot)
 
     # ── /admin bookings ───────────────────────────────────────────────────
 

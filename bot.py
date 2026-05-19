@@ -19,6 +19,7 @@ COGS = [
     "cogs.error_handler",
     "cogs.booking",
     "cogs.admin",
+    "cogs.mentor",
 ]
 
 

@@ -35,6 +35,23 @@ async def init_db() -> None:
                 message_id  TEXT    NOT NULL,
                 guild_id    TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS slot_templates (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                mentor_id        INTEGER NOT NULL UNIQUE REFERENCES mentors(id) ON DELETE CASCADE,
+                start_hour       INTEGER NOT NULL DEFAULT 19,
+                start_minute     INTEGER NOT NULL DEFAULT 0,
+                end_hour         INTEGER NOT NULL DEFAULT 21,
+                end_minute       INTEGER NOT NULL DEFAULT 0,
+                interval_minutes INTEGER NOT NULL DEFAULT 30
+            );
+
+            CREATE TABLE IF NOT EXISTS blocked_dates (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                mentor_id INTEGER NOT NULL REFERENCES mentors(id) ON DELETE CASCADE,
+                date      TEXT    NOT NULL,
+                UNIQUE(mentor_id, date)
+            );
         """)
         await db.commit()
 
@@ -244,3 +261,84 @@ async def delete_panel(panel_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM panels WHERE id = ?", (panel_id,))
         await db.commit()
+
+
+# ── Template helpers ──────────────────────────────────────────────────────────
+
+async def set_slot_template(
+    mentor_id: int,
+    start_hour: int,
+    start_minute: int,
+    end_hour: int,
+    end_minute: int,
+    interval_minutes: int,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO slot_templates
+               (mentor_id, start_hour, start_minute, end_hour, end_minute, interval_minutes)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(mentor_id) DO UPDATE SET
+                 start_hour=excluded.start_hour,
+                 start_minute=excluded.start_minute,
+                 end_hour=excluded.end_hour,
+                 end_minute=excluded.end_minute,
+                 interval_minutes=excluded.interval_minutes""",
+            (mentor_id, start_hour, start_minute, end_hour, end_minute, interval_minutes),
+        )
+        await db.commit()
+
+
+async def get_slot_template(mentor_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM slot_templates WHERE mentor_id = ?", (mentor_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+# ── Blocked date helpers ──────────────────────────────────────────────────────
+
+async def block_date(mentor_id: int, date: str) -> bool:
+    """Returns False if already blocked."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO blocked_dates (mentor_id, date) VALUES (?, ?)",
+                (mentor_id, date),
+            )
+            await db.commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def unblock_date(mentor_id: int, date: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "DELETE FROM blocked_dates WHERE mentor_id = ? AND date = ?",
+            (mentor_id, date),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def get_blocked_dates(mentor_id: int) -> list[str]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT date FROM blocked_dates WHERE mentor_id = ? ORDER BY date",
+            (mentor_id,),
+        ) as cur:
+            return [row["date"] for row in await cur.fetchall()]
+
+
+async def is_date_blocked(mentor_id: int, date: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM blocked_dates WHERE mentor_id = ? AND date = ?",
+            (mentor_id, date),
+        ) as cur:
+            return await cur.fetchone() is not None
