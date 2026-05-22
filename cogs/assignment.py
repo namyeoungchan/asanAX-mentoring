@@ -14,7 +14,7 @@ import discord
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 import config
 import database
@@ -1015,6 +1015,66 @@ class Assignment(commands.Cog):
     async def cog_load(self) -> None:
         self.bot.add_view(SubmitPanelView(self.bot))
         self.bot.add_view(AdminDashboardView(self.bot))
+        self.deadline_reminder.start()
+
+    async def cog_unload(self) -> None:
+        self.deadline_reminder.cancel()
+
+    # ── Deadline reminder loop ─────────────────────────────────────────────────
+    # Runs daily at 09:00 KST (00:00 UTC)
+
+    @tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone.utc))
+    async def deadline_reminder(self) -> None:
+        # Tomorrow in KST = today UTC+9 + 1 day
+        tomorrow_kst = (
+            datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9)))
+            + datetime.timedelta(days=1)
+        ).date()
+        due_str = tomorrow_kst.isoformat()
+
+        assignments = await database.get_team_assignments_due_on(due_str)
+        if not assignments:
+            return
+
+        guild = self.bot.get_guild(config.GUILD_ID)
+        if not guild:
+            return
+
+        for assignment in assignments:
+            subs = await database.get_submissions(assignment["id"])
+            submitted_teams = {s["team"] for s in subs}
+
+            for team, channel_id in config.TEAM_CHANNELS.items():
+                if team in submitted_teams:
+                    continue  # already submitted
+                if await database.is_assignment_reminder_sent(assignment["id"], team):
+                    continue  # already reminded
+
+                ch = guild.get_channel(channel_id)
+                if not ch or not isinstance(ch, discord.TextChannel):
+                    continue
+
+                embed = discord.Embed(
+                    title="⏰ 과제 마감 D-1 알림",
+                    description=(
+                        f"**{assignment['week']}주차 — {assignment['title']}** 과제 마감이 "
+                        f"**내일({due_str})** 입니다.\n\n"
+                        "아직 제출하지 않으셨습니다. 마감 전에 과제를 제출해주세요! 🙏"
+                    ),
+                    color=discord.Color.orange(),
+                )
+                embed.set_footer(text="아산 AX · 과제 마감 알림")
+
+                try:
+                    await ch.send(embed=embed)
+                    await database.mark_assignment_reminder_sent(assignment["id"], team)
+                    log.info("Deadline reminder sent to %s for assignment %d", team, assignment["id"])
+                except discord.Forbidden:
+                    log.warning("Cannot send reminder to channel %d (%s)", channel_id, team)
+
+    @deadline_reminder.before_loop
+    async def before_deadline_reminder(self) -> None:
+        await self.bot.wait_until_ready()
 
     # ── /과제 패널 ─────────────────────────────────────────────────────────────
 

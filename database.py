@@ -109,6 +109,13 @@ async def init_db() -> None:
                 channel_id  TEXT NOT NULL,
                 message_id  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS assignment_reminders (
+                assignment_id INTEGER NOT NULL,
+                team          TEXT    NOT NULL,
+                sent_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(assignment_id, team)
+            );
         """)
         await db.commit()
         # Migration: add status / rejection_reason columns if missing
@@ -845,6 +852,38 @@ async def save_assignment_panel(panel_type: str, channel_id: str, message_id: st
             (panel_type, channel_id, message_id),
         )
         await db.commit()
+
+
+async def get_team_assignments_due_on(due_date: str) -> list[dict]:
+    """Returns active team assignments whose due_date matches the given YYYY-MM-DD."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM assignments WHERE type = 'team' AND is_active = 1 AND due_date = ?",
+            (due_date,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def is_assignment_reminder_sent(assignment_id: int, team: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM assignment_reminders WHERE assignment_id = ? AND team = ?",
+            (assignment_id, team),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def mark_assignment_reminder_sent(assignment_id: int, team: str) -> None:
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO assignment_reminders (assignment_id, team) VALUES (?, ?)",
+                (assignment_id, team),
+            )
+            await db.commit()
+    except aiosqlite.IntegrityError:
+        pass
 
 
 async def get_assignment_panel(panel_type: str) -> dict | None:
