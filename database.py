@@ -595,6 +595,43 @@ async def complete_onboarding(user_id: str) -> bool:
         return True
 
 
+async def clear_slots(mentor_id: int) -> tuple[int, int]:
+    """
+    Delete all active slots for a mentor that have no booking.
+    Returns (deleted, kept) where kept = slots skipped due to existing bookings.
+    """
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            """
+            SELECT s.id FROM slots s
+            LEFT JOIN bookings b ON b.slot_id = s.id
+            WHERE s.mentor_id = ? AND s.is_active = 1 AND b.id IS NULL
+            """,
+            (mentor_id,),
+        ) as cur:
+            to_delete = [row[0] for row in await cur.fetchall()]
+
+        async with db.execute(
+            """
+            SELECT COUNT(*) FROM slots s
+            JOIN bookings b ON b.slot_id = s.id
+            WHERE s.mentor_id = ? AND s.is_active = 1
+            """,
+            (mentor_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            kept = row[0] if row else 0
+
+        if to_delete:
+            await db.execute(
+                f"DELETE FROM slots WHERE id IN ({','.join('?' * len(to_delete))})",
+                to_delete,
+            )
+            await db.commit()
+
+        return len(to_delete), kept
+
+
 async def get_blocked_weekdays(mentor_id: int) -> list[int]:
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(

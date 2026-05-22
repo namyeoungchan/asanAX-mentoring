@@ -145,6 +145,42 @@ class SlotGenerateModal(discord.ui.Modal, title="슬롯 생성"):
         await refresh_all_panels(self.bot)
 
 
+# ── Slot clear confirmation view ──────────────────────────────────────────────
+
+class SlotClearConfirmView(discord.ui.View):
+    def __init__(self, mentor: dict, bot: commands.Bot) -> None:
+        super().__init__(timeout=60)
+        self.mentor = mentor
+        self.bot = bot
+
+    @discord.ui.button(label="✅ 확인 — 초기화", style=discord.ButtonStyle.danger)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        deleted, kept = await database.clear_slots(self.mentor["id"])
+
+        lines = [f"🗑️ 삭제된 슬롯: **{deleted}개**"]
+        if kept:
+            lines.append(f"⚠️ 예약이 있어 유지된 슬롯: **{kept}개**")
+
+        await interaction.response.edit_message(
+            embed=discord.Embed(
+                title="슬롯 초기화 완료",
+                description="\n".join(lines),
+                color=discord.Color.green(),
+            ),
+            view=None,
+        )
+
+        from cogs.admin import refresh_all_panels
+        await refresh_all_panels(self.bot)
+
+    @discord.ui.button(label="취소", style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(
+            embed=discord.Embed(description="초기화가 취소되었습니다.", color=discord.Color.blurple()),
+            view=None,
+        )
+
+
 # ── Setup panel view ──────────────────────────────────────────────────────────
 
 class MentorSetupView(discord.ui.View):
@@ -217,6 +253,27 @@ class MentorSetupView(discord.ui.View):
                 color=discord.Color.orange(),
             ),
             view=BlockWeekdayView(self.mentor, blocked_wdays),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="🗑️ 슬롯 초기화", style=discord.ButtonStyle.danger, row=1)
+    async def clear_slots(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        slots = await database.get_slots_for_mentor(self.mentor["id"], active_only=True)
+        slot_ids = [s["id"] for s in slots]
+        bookings_map = await database.get_bookings_by_slot_ids(slot_ids)
+        no_booking = sum(1 for s in slots if s["id"] not in bookings_map)
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="⚠️ 슬롯 초기화",
+                description=(
+                    f"예약이 없는 슬롯 **{no_booking}개**가 삭제됩니다.\n"
+                    + (f"예약이 있는 슬롯 **{len(bookings_map)}개**는 유지됩니다.\n" if bookings_map else "")
+                    + "\n정말 초기화하시겠습니까?"
+                ),
+                color=discord.Color.red(),
+            ),
+            view=SlotClearConfirmView(self.mentor, self.bot),
             ephemeral=True,
         )
 
