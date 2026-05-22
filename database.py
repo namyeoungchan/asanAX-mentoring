@@ -764,6 +764,34 @@ async def deactivate_assignment(assignment_id: int) -> bool:
         return cur.rowcount > 0
 
 
+async def update_assignment(
+    assignment_id: int,
+    week: int,
+    title: str,
+    description: str,
+    due_date: str,
+    type_: str,
+    fields: str,
+) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            """UPDATE assignments
+               SET week=?, title=?, description=?, due_date=?, type=?, fields=?
+               WHERE id=?""",
+            (week, title, description, due_date, type_, fields, assignment_id),
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def delete_assignment(assignment_id: int) -> bool:
+    """Hard delete — cascades to submissions."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("DELETE FROM assignments WHERE id = ?", (assignment_id,))
+        await db.commit()
+        return cur.rowcount > 0
+
+
 # ── Submission helpers ─────────────────────────────────────────────────────────
 
 async def create_submission(
