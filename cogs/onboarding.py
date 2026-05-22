@@ -14,7 +14,7 @@ import database
 
 log = logging.getLogger("asanAX.onboarding")
 
-TEAMS = ["팀 1", "팀 2", "팀 3", "팀 4", "팀 5", "팀 6"]
+TEAMS = ["팀1", "팀2", "팀3", "팀4", "팀5", "팀6"]
 
 
 # ── Embeds ─────────────────────────────────────────────────────────────────────
@@ -215,12 +215,15 @@ async def _process_intro(
                 embed=team_embed,
             )
 
-    # 2. Set nickname to 실명_팀명
+    # 2. Set nickname to 실명_팀명  (e.g. 남영찬_팀1)
     new_nick = f"{name}_{team}"[:32]
     try:
         await member.edit(nick=new_nick, reason="온보딩 자기소개 제출 — 닉네임 자동 설정")
+        log.info("Nickname set to %s for %s", new_nick, member)
     except discord.Forbidden:
-        log.warning("Could not change nickname for %s", member)
+        log.warning("Could not change nickname for %s — bot role may be lower than member role, or member is server owner", member)
+    except discord.HTTPException as e:
+        log.error("Nickname change failed for %s: %s", member, e)
 
     # 3. Mark DB complete
     first_time = await database.complete_onboarding(str(member.id))
