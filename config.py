@@ -24,6 +24,10 @@ QA_FORUM_CHANNEL_ID: int = int(os.getenv("QA_FORUM_CHANNEL_ID", "150631396484867
 QA_NOTIFY_ROLE_IDS: list[int] = [1503760172995313775, 1503760174207471787]
 QA_UNANSWERED_HOURS: int = int(os.getenv("QA_UNANSWERED_HOURS", "24"))
 
+# ── Assignment ────────────────────────────────────────────────────────────────
+ASSIGNMENT_DASHBOARD_CHANNEL_ID: int = 1507392706647822438
+ASSIGNMENT_SUBMIT_CHANNEL_ID: int = 1507392606571856103
+
 # ── Onboarding ────────────────────────────────────────────────────────────────
 # Role assigned immediately on join (restricted access)
 STUDENT_ROLE_ID: int = int(os.getenv("STUDENT_ROLE_ID", "1503760182281244743"))

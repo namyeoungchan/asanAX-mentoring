@@ -80,6 +80,35 @@ async def init_db() -> None:
                 intro_done   INTEGER NOT NULL DEFAULT 0,
                 completed_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS assignments (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                week        INTEGER NOT NULL,
+                title       TEXT    NOT NULL,
+                description TEXT    NOT NULL DEFAULT '',
+                due_date    TEXT    NOT NULL,
+                type        TEXT    NOT NULL DEFAULT 'team',
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                is_active   INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS submissions (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                user_id       TEXT    NOT NULL,
+                user_name     TEXT    NOT NULL,
+                team          TEXT    NOT NULL DEFAULT '',
+                content       TEXT    NOT NULL,
+                link          TEXT    NOT NULL DEFAULT '',
+                submitted_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(assignment_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS assignment_panels (
+                panel_type  TEXT PRIMARY KEY,
+                channel_id  TEXT NOT NULL,
+                message_id  TEXT NOT NULL
+            );
         """)
         await db.commit()
         # Migration: add status / rejection_reason columns if missing
@@ -674,6 +703,113 @@ async def get_onboarding(user_id: str) -> dict | None:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT * FROM onboarding_progress WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+# ── Assignment helpers ─────────────────────────────────────────────────────────
+
+async def create_assignment(
+    week: int, title: str, description: str, due_date: str, type_: str = "team"
+) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "INSERT INTO assignments (week, title, description, due_date, type) VALUES (?, ?, ?, ?, ?)",
+            (week, title, description, due_date, type_),
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_assignments(active_only: bool = True) -> list[dict]:
+    query = "SELECT * FROM assignments"
+    if active_only:
+        query += " WHERE is_active = 1"
+    query += " ORDER BY week, id"
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(query) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_assignment(assignment_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM assignments WHERE id = ?", (assignment_id,)) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def deactivate_assignment(assignment_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE assignments SET is_active = 0 WHERE id = ?", (assignment_id,)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+# ── Submission helpers ─────────────────────────────────────────────────────────
+
+async def create_submission(
+    assignment_id: int, user_id: str, user_name: str, team: str, content: str, link: str
+) -> bool:
+    """Returns False if user already submitted this assignment."""
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO submissions (assignment_id, user_id, user_name, team, content, link)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (assignment_id, user_id, user_name, team, content, link),
+            )
+            await db.commit()
+        return True
+    except aiosqlite.IntegrityError:
+        return False
+
+
+async def get_submissions(assignment_id: int) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM submissions WHERE assignment_id = ? ORDER BY team, submitted_at",
+            (assignment_id,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_submission(assignment_id: int, user_id: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM submissions WHERE assignment_id = ? AND user_id = ?",
+            (assignment_id, user_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+# ── Assignment panel helpers ───────────────────────────────────────────────────
+
+async def save_assignment_panel(panel_type: str, channel_id: str, message_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO assignment_panels (panel_type, channel_id, message_id)
+               VALUES (?, ?, ?)
+               ON CONFLICT(panel_type) DO UPDATE SET
+                 channel_id = excluded.channel_id,
+                 message_id = excluded.message_id""",
+            (panel_type, channel_id, message_id),
+        )
+        await db.commit()
+
+
+async def get_assignment_panel(panel_type: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM assignment_panels WHERE panel_type = ?", (panel_type,)
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
