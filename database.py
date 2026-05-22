@@ -66,6 +66,13 @@ async def init_db() -> None:
                 alerted_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS blocked_weekdays (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                mentor_id INTEGER NOT NULL REFERENCES mentors(id) ON DELETE CASCADE,
+                weekday   INTEGER NOT NULL,  -- 0=월 1=화 2=수 3=목 4=금 5=토 6=일
+                UNIQUE(mentor_id, weekday)
+            );
+
             CREATE TABLE IF NOT EXISTS onboarding_progress (
                 user_id      TEXT PRIMARY KEY,
                 guild_id     TEXT NOT NULL,
@@ -494,9 +501,10 @@ async def generate_slots_for_range(
     interval = template["interval_minutes"]
     created = skipped = 0
     current = date_from
+    blocked_wdays = set(await get_blocked_weekdays(mentor_id))
 
     while current <= date_to:
-        if await is_date_blocked(mentor_id, current.isoformat()):
+        if await is_date_blocked(mentor_id, current.isoformat()) or current.weekday() in blocked_wdays:
             skipped += 1
             current += timedelta(days=1)
             continue
@@ -585,6 +593,27 @@ async def complete_onboarding(user_id: str) -> bool:
         )
         await db.commit()
         return True
+
+
+async def get_blocked_weekdays(mentor_id: int) -> list[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT weekday FROM blocked_weekdays WHERE mentor_id = ? ORDER BY weekday",
+            (mentor_id,),
+        ) as cur:
+            return [row[0] for row in await cur.fetchall()]
+
+
+async def set_blocked_weekdays(mentor_id: int, weekdays: list[int]) -> None:
+    """Replace all blocked weekdays for a mentor."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM blocked_weekdays WHERE mentor_id = ?", (mentor_id,))
+        for w in weekdays:
+            await db.execute(
+                "INSERT OR IGNORE INTO blocked_weekdays (mentor_id, weekday) VALUES (?, ?)",
+                (mentor_id, w),
+            )
+        await db.commit()
 
 
 async def is_qa_alerted(thread_id: str) -> bool:

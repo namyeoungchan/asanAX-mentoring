@@ -205,6 +205,21 @@ class MentorSetupView(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(label="📆 요일 차단", style=discord.ButtonStyle.secondary, row=1)
+    async def block_weekdays(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        from cogs.mentor import BlockWeekdayView
+
+        blocked_wdays = await database.get_blocked_weekdays(self.mentor["id"])
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="📆 예약 불가 요일 설정",
+                description="매주 반복해서 예약을 받지 않을 요일을 선택하세요.\n선택하지 않으면 모든 요일이 차단 해제됩니다.",
+                color=discord.Color.orange(),
+            ),
+            view=BlockWeekdayView(self.mentor, blocked_wdays),
+            ephemeral=True,
+        )
+
     @discord.ui.button(label="🔄 새로고침", style=discord.ButtonStyle.secondary, row=1)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         template = await database.get_slot_template(self.mentor["id"])
@@ -263,6 +278,15 @@ async def build_setup_embed(mentor: dict, template: dict | None) -> discord.Embe
     embed.add_field(
         name="🚫 예약 불가일",
         value="\n".join(f"• {d}" for d in blocked) if blocked else "없음",
+        inline=True,
+    )
+
+    # Blocked weekdays
+    _wd = ["월", "화", "수", "목", "금", "토", "일"]
+    blocked_wdays = await database.get_blocked_weekdays(mentor["id"])
+    embed.add_field(
+        name="📆 예약 불가 요일",
+        value=" · ".join(f"{_wd[w]}요일" for w in blocked_wdays) if blocked_wdays else "없음",
         inline=True,
     )
 

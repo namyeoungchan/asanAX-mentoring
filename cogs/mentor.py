@@ -33,7 +33,7 @@ class BlockDateView(discord.ui.View):
         self.mentor = mentor
         self.blocked = set(blocked)
 
-        dates = _next_n_dates(30)
+        dates = _next_n_dates(25)  # Discord Select max 25 options
         options = []
         for d in dates:
             ds = d.isoformat()
@@ -118,6 +118,57 @@ class UnblockDateView(discord.ui.View):
             title="예약 불가일 해제 완료",
             description="\n".join(f"• {d}" for d in selected),
             color=discord.Color.green(),
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+        from cogs.admin import refresh_all_panels
+        await refresh_all_panels(interaction.client)
+
+
+class BlockWeekdayView(discord.ui.View):
+    """Select menu for blocking recurring weekdays."""
+
+    def __init__(self, mentor: dict, blocked_weekdays: list[int]) -> None:
+        super().__init__(timeout=120)
+        self.mentor = mentor
+        blocked_set = set(blocked_weekdays)
+
+        options = [
+            discord.SelectOption(
+                label=f"{WEEKDAYS[i]}요일",
+                value=str(i),
+                description="매주 이 요일은 예약 불가",
+                emoji="🚫" if i in blocked_set else "📅",
+                default=i in blocked_set,
+            )
+            for i in range(7)
+        ]
+
+        select = discord.ui.Select(
+            placeholder="차단할 요일 선택 (없으면 그냥 확인)",
+            min_values=0,
+            max_values=7,
+            options=options,
+        )
+        select.callback = self._callback
+        self.add_item(select)
+
+    async def _callback(self, interaction: discord.Interaction) -> None:
+        selected = [int(v) for v in interaction.data["values"]]  # type: ignore[index]
+        await database.set_blocked_weekdays(self.mentor["id"], selected)
+
+        if selected:
+            blocked_str = " · ".join(f"{WEEKDAYS[w]}요일" for w in sorted(selected))
+        else:
+            blocked_str = "없음"
+
+        embed = discord.Embed(
+            title="📆 요일 차단 설정 완료",
+            description=(
+                f"🚫 차단된 요일: **{blocked_str}**\n\n"
+                "슬롯 생성 시 해당 요일은 자동으로 건너뜁니다."
+            ),
+            color=discord.Color.orange(),
         )
         await interaction.response.edit_message(embed=embed, view=None)
 
