@@ -6,10 +6,13 @@
 - 대시보드: 과제 생성·제출 시 자동 갱신 (주차별 팀 제출 현황)
 """
 import datetime
+import io
 import json
 import logging
 
 import discord
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 from discord import app_commands
 from discord.ext import commands
 
@@ -204,6 +207,90 @@ class CreateAssignmentModal(discord.ui.Modal):
             ephemeral=True,
         )
         await refresh_dashboard(self.bot)
+
+
+# ── Excel export ─────────────────────────────────────────────────────────────
+
+async def build_excel(assignment_id: int | None = None) -> tuple[io.BytesIO, str]:
+    """
+    Build an Excel workbook for one assignment (or all active ones).
+    Returns (BytesIO, filename).
+    """
+    if assignment_id is not None:
+        assignments = [a for a in await database.get_assignments(active_only=False) if a["id"] == assignment_id]
+    else:
+        assignments = await database.get_assignments(active_only=False)
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # remove default sheet
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", fgColor="2B5CE6")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for a in assignments:
+        subs = await database.get_submissions(a["id"])
+        field_names = _parse_fields(a.get("fields"))
+
+        sheet_name = f"{a['week']}주차_{a['title']}"[:31]  # Excel sheet name max 31 chars
+        ws = wb.create_sheet(title=sheet_name)
+
+        # ── Header row ────────────────────────────────────────────────────────
+        headers = ["팀", "이름", *field_names, "링크", "제출 시각"]
+        for col, h in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col, value=h)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = center
+
+        # ── Meta row (assignment info) ─────────────────────────────────────────
+        ws.insert_rows(1)
+        meta = ws.cell(row=1, column=1, value=f"{a['week']}주차 — {a['title']}  |  마감: {a['due_date']}  |  총 {len(subs)}건")
+        meta.font = Font(bold=True, size=12)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+
+        # ── Data rows ─────────────────────────────────────────────────────────
+        for row_idx, sub in enumerate(subs, start=3):
+            try:
+                fv: dict = json.loads(sub["content"])
+            except (json.JSONDecodeError, TypeError):
+                fv = {field_names[0]: sub["content"]} if field_names else {}
+
+            ws.cell(row=row_idx, column=1, value=sub["team"])
+            ws.cell(row=row_idx, column=2, value=sub["user_name"])
+            for col_offset, fname in enumerate(field_names):
+                ws.cell(row=row_idx, column=3 + col_offset, value=fv.get(fname, ""))
+            ws.cell(row=row_idx, column=3 + len(field_names), value=sub["link"] or "")
+            ws.cell(row=row_idx, column=4 + len(field_names), value=sub["submitted_at"])
+
+        # ── Column widths ──────────────────────────────────────────────────────
+        ws.column_dimensions["A"].width = 8   # 팀
+        ws.column_dimensions["B"].width = 14  # 이름
+        col_letters = [openpyxl.utils.get_column_letter(i) for i in range(3, 3 + len(field_names))]
+        for letter in col_letters:
+            ws.column_dimensions[letter].width = 40
+        link_col = openpyxl.utils.get_column_letter(3 + len(field_names))
+        time_col = openpyxl.utils.get_column_letter(4 + len(field_names))
+        ws.column_dimensions[link_col].width = 50
+        ws.column_dimensions[time_col].width = 20
+
+        ws.freeze_panes = "A3"  # freeze meta + header
+
+    if not wb.sheetnames:
+        ws = wb.create_sheet("과제 없음")
+        ws.cell(row=1, column=1, value="내보낼 과제 데이터가 없습니다.")
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    today = datetime.date.today().isoformat()
+    if assignment_id is not None and assignments:
+        fname = f"과제_{assignments[0]['week']}주차_{today}.xlsx"
+    else:
+        fname = f"과제_전체_{today}.xlsx"
+
+    return buf, fname
 
 
 # ── Admin: Submission detail view (ephemeral, paginated) ─────────────────────
@@ -401,6 +488,27 @@ class AdminDashboardView(discord.ui.View):
                 view=SubmissionAssignmentSelectView(self.bot, assignments),
                 ephemeral=True,
             )
+
+    @discord.ui.button(
+        label="📥 엑셀 내보내기",
+        style=discord.ButtonStyle.secondary,
+        custom_id="assignment:export_excel",
+        row=1,
+    )
+    async def export_excel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        buf, fname = await build_excel()
+        await interaction.followup.send(
+            content="📊 전체 과제 제출 현황 엑셀 파일입니다.",
+            file=discord.File(buf, filename=fname),
+            ephemeral=True,
+        )
 
     @discord.ui.button(
         label="🔄 새로고침",
