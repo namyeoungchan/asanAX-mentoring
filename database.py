@@ -127,6 +127,15 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE bookings ADD COLUMN rejection_reason TEXT DEFAULT ''"
         )
+
+    # assignments.fields migration
+    async with db.execute("PRAGMA table_info(assignments)") as cur:
+        a_cols = {row[1] for row in await cur.fetchall()}
+    if "fields" not in a_cols:
+        await db.execute(
+            "ALTER TABLE assignments ADD COLUMN fields TEXT NOT NULL DEFAULT '[\"제출 내용\"]'"
+        )
+
     await db.commit()
 
 
@@ -711,12 +720,17 @@ async def get_onboarding(user_id: str) -> dict | None:
 # ── Assignment helpers ─────────────────────────────────────────────────────────
 
 async def create_assignment(
-    week: int, title: str, description: str, due_date: str, type_: str = "team"
+    week: int,
+    title: str,
+    description: str,
+    due_date: str,
+    type_: str = "team",
+    fields: str = '["제출 내용"]',
 ) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
-            "INSERT INTO assignments (week, title, description, due_date, type) VALUES (?, ?, ?, ?, ?)",
-            (week, title, description, due_date, type_),
+            "INSERT INTO assignments (week, title, description, due_date, type, fields) VALUES (?, ?, ?, ?, ?, ?)",
+            (week, title, description, due_date, type_, fields),
         )
         await db.commit()
         return cur.lastrowid
