@@ -836,26 +836,6 @@ class DynamicSubmitModal(discord.ui.Modal):
             )
             return
 
-        # Post public notice to 과제제출 channel
-        submit_ch = interaction.guild.get_channel(config.ASSIGNMENT_SUBMIT_CHANNEL_ID)  # type: ignore[union-attr]
-        if submit_ch and isinstance(submit_ch, discord.TextChannel):
-            pub = discord.Embed(
-                title="📝 과제 제출",
-                description=f"**{self.assignment['week']}주차 — {self.assignment['title']}**",
-                color=discord.Color.green(),
-            )
-            pub.set_author(
-                name=interaction.user.display_name,
-                icon_url=interaction.user.display_avatar.url,
-            )
-            pub.add_field(name="팀", value=self.team, inline=True)
-            pub.add_field(name="제출자", value=interaction.user.mention, inline=True)
-            for label, value in field_values.items():
-                pub.add_field(name=label, value=value[:500] or "—", inline=False)
-            if link:
-                pub.add_field(name="링크", value=link, inline=False)
-            await submit_ch.send(embed=pub)
-
         await interaction.followup.send(
             embed=discord.Embed(
                 title="✅ 제출 완료!",
