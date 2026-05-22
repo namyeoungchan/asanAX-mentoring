@@ -1,10 +1,8 @@
 """
 온보딩 플로우
-1. 멤버 서버 참여 → 수강생 역할 부여 → 온보딩 채널에 안내 메시지
-2. 안내 메시지의 버튼 클릭 → 자기소개 Modal
+1. 멤버 서버 참여 → 수강생 역할 부여 → DM으로 온보딩 안내 (DM 차단 시 채널 fallback)
+2. 버튼 클릭 → 팀 선택 드롭다운 → 자기소개 Modal
 3. Modal 제출 → #자기소개 채널에 포스트 → 온보딩완료 역할 부여 → DM 알림
-
-또는 사용자가 #자기소개 채널에 직접 작성해도 동일하게 처리.
 """
 import logging
 
@@ -15,6 +13,8 @@ import config
 import database
 
 log = logging.getLogger("asanAX.onboarding")
+
+TEAMS = ["팀 1", "팀 2", "팀 3", "팀 4", "팀 5", "팀 6"]
 
 
 # ── Embeds ─────────────────────────────────────────────────────────────────────
@@ -66,11 +66,6 @@ class IntroModal(discord.ui.Modal, title="자기소개 작성"):
         placeholder="홍길동",
         max_length=20,
     )
-    team_field = discord.ui.TextInput(
-        label="팀명",
-        placeholder="AX팀",
-        max_length=30,
-    )
     intro_field = discord.ui.TextInput(
         label="자기소개",
         placeholder="안녕하세요! 저는 ...",
@@ -84,15 +79,16 @@ class IntroModal(discord.ui.Modal, title="자기소개 작성"):
         max_length=200,
     )
     goal_field = discord.ui.TextInput(
-        label="이 과정에서 이루고 싶은 것 (선택)",
+        label="이루고 싶은 것 (선택)",
         placeholder="예: AI 서비스 MVP 출시",
         required=False,
         max_length=200,
     )
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: commands.Bot, team: str) -> None:
         super().__init__()
         self.bot = bot
+        self.team = team
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
@@ -101,7 +97,7 @@ class IntroModal(discord.ui.Modal, title="자기소개 작성"):
             member=interaction.user,  # type: ignore[arg-type]
             guild=interaction.guild,  # type: ignore[arg-type]
             name=self.name_field.value.strip(),
-            team=self.team_field.value.strip(),
+            team=self.team,
             intro=self.intro_field.value.strip(),
             background=self.background_field.value.strip(),
             goal=self.goal_field.value.strip(),
@@ -112,10 +108,34 @@ class IntroModal(discord.ui.Modal, title="자기소개 작성"):
         )
 
 
-# ── View ───────────────────────────────────────────────────────────────────────
+# ── Team select view ───────────────────────────────────────────────────────────
+
+class TeamSelectView(discord.ui.View):
+    """Step 1: select team before opening the intro modal."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+
+        options = [discord.SelectOption(label=t, value=t, emoji="👥") for t in TEAMS]
+        select = discord.ui.Select(
+            placeholder="소속 팀을 선택하세요",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        select.callback = self._on_team_select
+        self.add_item(select)
+
+    async def _on_team_select(self, interaction: discord.Interaction) -> None:
+        team = interaction.data["values"][0]  # type: ignore[index]
+        await interaction.response.send_modal(IntroModal(self.bot, team))
+
+
+# ── Persistent onboarding view ─────────────────────────────────────────────────
 
 class OnboardingView(discord.ui.View):
-    """Persistent view attached to the welcome message in #온보딩."""
+    """Persistent view — survives bot restarts via custom_id."""
 
     def __init__(self, bot: commands.Bot) -> None:
         super().__init__(timeout=None)
@@ -129,7 +149,6 @@ class OnboardingView(discord.ui.View):
     async def write_intro(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        # Already completed?
         record = await database.get_onboarding(str(interaction.user.id))
         if record and record["intro_done"]:
             await interaction.response.send_message(
@@ -142,7 +161,16 @@ class OnboardingView(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(IntroModal(self.bot))
+        # Show team select first (ephemeral — only visible to the user)
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="👥 소속 팀 선택",
+                description="먼저 소속 팀을 선택해주세요.",
+                color=discord.Color.from_str("#2B5CE6"),
+            ),
+            view=TeamSelectView(self.bot),
+            ephemeral=True,
+        )
 
 
 # ── Helper: process intro submission ──────────────────────────────────────────
@@ -165,10 +193,7 @@ async def _process_intro(
             description=intro,
             color=discord.Color.from_str("#2B5CE6"),
         )
-        embed.set_author(
-            name=member.display_name,
-            icon_url=member.display_avatar.url,
-        )
+        embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
         if background:
             embed.add_field(name="배경 / 관심사", value=background, inline=False)
         if goal:
@@ -177,13 +202,13 @@ async def _process_intro(
         await intro_ch.send(embed=embed)
 
     # 2. Set nickname to 실명_팀명
-    new_nick = f"{name}_{team}"[:32]  # Discord nickname max length is 32
+    new_nick = f"{name}_{team}"[:32]
     try:
         await member.edit(nick=new_nick, reason="온보딩 자기소개 제출 — 닉네임 자동 설정")
     except discord.Forbidden:
-        log.warning("Could not change nickname for %s — missing permissions or server owner", member)
+        log.warning("Could not change nickname for %s", member)
 
-    # 3. Mark DB complete; if already done skip role grant
+    # 3. Mark DB complete
     first_time = await database.complete_onboarding(str(member.id))
     if not first_time:
         return
@@ -195,13 +220,13 @@ async def _process_intro(
             try:
                 await member.add_roles(role, reason="온보딩 완료")
             except discord.Forbidden:
-                log.warning("Could not assign complete role to %s — missing permissions", member)
+                log.warning("Could not assign complete role to %s", member)
 
-    # 4. DM the member
+    # 5. DM the member
     try:
         await member.send(embed=_intro_submitted_embed(member))
     except discord.Forbidden:
-        pass  # DM closed
+        pass
 
 
 # ── Cog ────────────────────────────────────────────────────────────────────────
@@ -210,11 +235,8 @@ class Onboarding(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
 
-    # Register the persistent view so it survives restarts
     async def cog_load(self) -> None:
         self.bot.add_view(OnboardingView(self.bot))
-
-    # ── Member join ───────────────────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
@@ -225,44 +247,48 @@ class Onboarding(commands.Cog):
         if student_role:
             try:
                 await member.add_roles(student_role, reason="서버 참여 — 수강생 역할 자동 부여")
-                log.info("Assigned 수강생 role to %s", member)
             except discord.Forbidden:
-                log.warning("Cannot assign 수강생 role to %s — missing permissions", member)
-        else:
-            log.warning("수강생 role (ID=%s) not found in guild", config.STUDENT_ROLE_ID)
+                log.warning("Cannot assign 수강생 role to %s", member)
 
         # 2. Record onboarding
         await database.create_onboarding(str(member.id), str(guild.id))
 
-        # 3. Post welcome in #온보딩 channel
-        onboarding_ch = guild.get_channel(config.ONBOARDING_CHANNEL_ID)
-        if onboarding_ch and isinstance(onboarding_ch, discord.TextChannel):
-            await onboarding_ch.send(
-                content=f"{member.mention} 님, 환영합니다!",
+        # 3. DM welcome message (only visible to the member)
+        dm_sent = False
+        try:
+            await member.send(
                 embed=_welcome_embed(member),
                 view=OnboardingView(self.bot),
             )
+            dm_sent = True
+        except discord.Forbidden:
+            log.warning("Cannot DM %s — falling back to channel", member)
 
-    # ── Direct post in #자기소개 ──────────────────────────────────────────────
+        # 4. Fallback: post in onboarding channel if DM failed
+        if not dm_sent:
+            onboarding_ch = guild.get_channel(config.ONBOARDING_CHANNEL_ID)
+            if onboarding_ch and isinstance(onboarding_ch, discord.TextChannel):
+                await onboarding_ch.send(
+                    content=f"{member.mention} 님, 환영합니다! (DM이 차단되어 여기에 안내드립니다)",
+                    embed=_welcome_embed(member),
+                    view=OnboardingView(self.bot),
+                )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        # Only handle messages in the intro channel from real users
         if message.author.bot:
             return
         if not message.guild:
             return
         if message.channel.id != config.INTRO_CHANNEL_ID:
             return
-        # Ignore very short messages (reactions, "안녕" etc.) — require at least 20 chars
         if len(message.content) < 20:
             return
 
         record = await database.get_onboarding(str(message.author.id))
         if record and record["intro_done"]:
-            return  # already completed
+            return
 
-        # Treat direct post as intro submission
         first_time = await database.complete_onboarding(str(message.author.id))
         if not first_time:
             return
@@ -270,22 +296,19 @@ class Onboarding(commands.Cog):
         member = message.author
         guild = message.guild
 
-        # Grant complete role
         if config.ONBOARDING_COMPLETE_ROLE_ID:
             role = guild.get_role(config.ONBOARDING_COMPLETE_ROLE_ID)
             if role:
                 try:
                     await member.add_roles(role, reason="온보딩 완료 (자기소개 채널 직접 작성)")  # type: ignore[union-attr]
                 except discord.Forbidden:
-                    log.warning("Could not assign complete role to %s", member)
+                    pass
 
-        # DM
         try:
             await member.send(embed=_intro_submitted_embed(member))  # type: ignore[arg-type]
         except discord.Forbidden:
             pass
 
-        # React to their message
         try:
             await message.add_reaction("🎉")
         except discord.Forbidden:
