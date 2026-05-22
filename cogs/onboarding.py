@@ -267,26 +267,13 @@ class Onboarding(commands.Cog):
         # 2. Record onboarding
         await database.create_onboarding(str(member.id), str(guild.id))
 
-        # 3. DM welcome message (only visible to the member)
-        dm_sent = False
-        try:
-            await member.send(
-                embed=_welcome_embed(member),
-                view=OnboardingView(self.bot),
+        # 3. Brief mention in onboarding channel — auto-deletes after 30s
+        onboarding_ch = guild.get_channel(config.ONBOARDING_CHANNEL_ID)
+        if onboarding_ch and isinstance(onboarding_ch, discord.TextChannel):
+            msg = await onboarding_ch.send(
+                content=f"👋 {member.mention} 님이 참여했습니다! 위의 **[✍️ 자기소개 작성하기]** 버튼을 눌러 온보딩을 시작해주세요."
             )
-            dm_sent = True
-        except discord.Forbidden:
-            log.warning("Cannot DM %s — falling back to channel", member)
-
-        # 4. Fallback: post in onboarding channel if DM failed
-        if not dm_sent:
-            onboarding_ch = guild.get_channel(config.ONBOARDING_CHANNEL_ID)
-            if onboarding_ch and isinstance(onboarding_ch, discord.TextChannel):
-                await onboarding_ch.send(
-                    content=f"{member.mention} 님, 환영합니다! (DM이 차단되어 여기에 안내드립니다)",
-                    embed=_welcome_embed(member),
-                    view=OnboardingView(self.bot),
-                )
+            await msg.delete(delay=30)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

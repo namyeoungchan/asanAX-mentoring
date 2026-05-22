@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+import config
 import database
 from config import ADMIN_ROLE_ID
 from ui import embeds
@@ -516,6 +517,60 @@ class Admin(commands.Cog):
 
         await interaction.response.send_message(
             embed=embeds.admin_bookings_embed(page_data, page, total_pages),
+            ephemeral=True,
+        )
+
+    # ── /admin onboarding-panel ──────────────────────────────────────────
+
+    @admin_group.command(
+        name="onboarding-panel",
+        description="#온보딩 채널에 고정 온보딩 버튼 메시지를 게시합니다.",
+    )
+    @is_admin()
+    async def onboarding_panel(self, interaction: discord.Interaction) -> None:
+        from cogs.onboarding import OnboardingView, _welcome_embed
+
+        channel = self.bot.get_channel(config.ONBOARDING_CHANNEL_ID)
+        if not channel or not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                embed=embeds.error_embed("온보딩 채널을 찾을 수 없습니다. ONBOARDING_CHANNEL_ID를 확인하세요."),
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="👋 Welcome to FOUNDERS 42",
+            description=(
+                "아산시 AX 글로벌 인재 양성 프로그램에 오신 것을 환영합니다!\n\n"
+                "아래 **[✍️ 자기소개 작성하기]** 버튼을 눌러 온보딩을 시작해주세요.\n"
+                "버튼을 누르면 본인에게만 보이는 화면이 열립니다."
+            ),
+            color=discord.Color.from_str("#2B5CE6"),
+        )
+        embed.add_field(
+            name="✅ 온보딩 체크리스트",
+            value=(
+                "① 팀 선택\n"
+                "② 자기소개 작성\n"
+                "③ 닉네임 자동 변경 (`실명_팀명`)\n"
+                "④ 팀 채널 및 협업 툴 접속 확인"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="💡 이 과정에서 중요한 것",
+            value="✔ 완벽보다 실행  ✔ 아이디어보다 검증\n✔ 혼자보다 협업  ✔ 스펙보다 결과물",
+            inline=False,
+        )
+        embed.set_footer(text="자기소개까지 완료하면 모든 채널 접근 권한이 부여됩니다 · 아산 AX")
+
+        await channel.send(embed=embed, view=OnboardingView(self.bot))
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ 온보딩 패널 게시 완료",
+                description=f"{channel.mention} 채널에 온보딩 버튼 메시지를 게시했습니다.",
+                color=discord.Color.green(),
+            ),
             ephemeral=True,
         )
 
