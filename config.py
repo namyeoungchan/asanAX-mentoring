@@ -9,6 +9,16 @@ ADMIN_ROLE_ID: int = int(os.environ["ADMIN_ROLE_ID"])
 DB_PATH: str = os.getenv("DB_PATH", "data/mentoring.db")
 SYNC_GLOBALLY: bool = os.getenv("SYNC_GLOBALLY", "false").lower() == "true"
 
+# ── Team channels (팀-채팅) ───────────────────────────────────────────────────
+TEAM_CHANNELS: dict[str, int] = {
+    "팀 1": 1506304242355277854,
+    "팀 2": 1507372300247502958,
+    "팀 3": 1507372438470787082,
+    "팀 4": 1507372495794208838,
+    "팀 5": 1507372720860434552,
+    "팀 6": 1507373054710517830,
+}
+
 # ── Q&A Forum ────────────────────────────────────────────────────────────────
 QA_FORUM_CHANNEL_ID: int = int(os.getenv("QA_FORUM_CHANNEL_ID", "1506313964848676966"))
 QA_NOTIFY_ROLE_IDS: list[int] = [1503760172995313775, 1503760174207471787]

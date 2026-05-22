@@ -185,21 +185,35 @@ async def _process_intro(
     background: str,
     goal: str,
 ) -> None:
-    # 1. Post to #자기소개 channel
+    # 1. Build intro embed (reused in both channels)
+    intro_embed = discord.Embed(
+        title=f"👤 {name} ({team})",
+        description=intro,
+        color=discord.Color.from_str("#2B5CE6"),
+    )
+    intro_embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
+    if background:
+        intro_embed.add_field(name="배경 / 관심사", value=background, inline=False)
+    if goal:
+        intro_embed.add_field(name="이루고 싶은 것", value=goal, inline=False)
+    intro_embed.set_footer(text="아산 AX · 자기소개")
+
+    # Post to #자기소개 channel
     intro_ch = guild.get_channel(config.INTRO_CHANNEL_ID)
     if intro_ch and isinstance(intro_ch, discord.TextChannel):
-        embed = discord.Embed(
-            title=f"👤 {name} ({team})",
-            description=intro,
-            color=discord.Color.from_str("#2B5CE6"),
-        )
-        embed.set_author(name=member.display_name, icon_url=member.display_avatar.url)
-        if background:
-            embed.add_field(name="배경 / 관심사", value=background, inline=False)
-        if goal:
-            embed.add_field(name="이루고 싶은 것", value=goal, inline=False)
-        embed.set_footer(text="아산 AX · 자기소개")
-        await intro_ch.send(embed=embed)
+        await intro_ch.send(embed=intro_embed)
+
+    # Post to team channel
+    team_ch_id = config.TEAM_CHANNELS.get(team)
+    if team_ch_id:
+        team_ch = guild.get_channel(team_ch_id)
+        if team_ch and isinstance(team_ch, discord.TextChannel):
+            team_embed = intro_embed.copy()
+            team_embed.description = f"{member.mention}\n\n{intro}"
+            await team_ch.send(
+                content=f"👋 새 팀원 {member.mention} 님이 합류했습니다!",
+                embed=team_embed,
+            )
 
     # 2. Set nickname to 실명_팀명
     new_nick = f"{name}_{team}"[:32]
