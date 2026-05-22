@@ -206,6 +206,116 @@ class CreateAssignmentModal(discord.ui.Modal):
         await refresh_dashboard(self.bot)
 
 
+# ── Admin: Submission detail view (ephemeral, paginated) ─────────────────────
+
+def _build_submission_page(assignment: dict, subs: list[dict], page: int, per_page: int) -> list[discord.Embed]:
+    total = len(subs)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    start = page * per_page
+    page_subs = subs[start : start + per_page]
+
+    header = discord.Embed(
+        title=f"📋 {assignment['week']}주차 — {assignment['title']} 제출 내역",
+        description=f"총 **{total}건** | {page + 1}/{total_pages} 페이지",
+        color=discord.Color.from_str("#2B5CE6"),
+    )
+    embeds = [header]
+
+    for sub in page_subs:
+        try:
+            field_values: dict = json.loads(sub["content"])
+        except (json.JSONDecodeError, TypeError):
+            field_values = {"내용": sub["content"]}
+
+        sub_embed = discord.Embed(
+            title=f"👤 {sub['user_name']} ({sub['team']})",
+            color=discord.Color.green(),
+        )
+        for label, value in field_values.items():
+            sub_embed.add_field(name=label, value=value[:512] or "—", inline=False)
+        if sub["link"]:
+            sub_embed.add_field(name="링크", value=sub["link"], inline=False)
+        sub_embed.set_footer(text=f"제출 시각: {sub['submitted_at']}")
+        embeds.append(sub_embed)
+
+    return embeds
+
+
+class SubmissionDetailView(discord.ui.View):
+    PER_PAGE = 4  # header + 4 submissions = 5 embeds (Discord max 10)
+
+    def __init__(self, assignment: dict, subs: list[dict], page: int = 0) -> None:
+        super().__init__(timeout=120)
+        self.assignment = assignment
+        self.subs = subs
+        self.page = page
+        self.total_pages = max(1, (len(subs) + self.PER_PAGE - 1) // self.PER_PAGE)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.prev_btn.disabled = self.page == 0
+        self.next_btn.disabled = self.page >= self.total_pages - 1
+
+    def build_embeds(self) -> list[discord.Embed]:
+        return _build_submission_page(self.assignment, self.subs, self.page, self.PER_PAGE)
+
+    @discord.ui.button(label="◀ 이전", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page -= 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embeds=self.build_embeds(), view=self)
+
+    @discord.ui.button(label="다음 ▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page += 1
+        self._sync_buttons()
+        await interaction.response.edit_message(embeds=self.build_embeds(), view=self)
+
+
+class SubmissionAssignmentSelectView(discord.ui.View):
+    def __init__(self, bot: commands.Bot, assignments: list[dict]) -> None:
+        super().__init__(timeout=60)
+        self.bot = bot
+        options = [
+            discord.SelectOption(
+                label=f"{a['week']}주차 — {a['title'][:45]}",
+                value=str(a["id"]),
+                description=f"마감: {a['due_date']}",
+            )
+            for a in assignments[:25]
+        ]
+        select = discord.ui.Select(
+            placeholder="제출 내역을 볼 과제를 선택하세요",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        assignment_id = int(interaction.data["values"][0])  # type: ignore[index]
+        assignment = await database.get_assignment(assignment_id)
+        if not assignment:
+            await interaction.response.edit_message(content="과제를 찾을 수 없습니다.", embeds=[], view=None)
+            return
+
+        subs = await database.get_submissions(assignment_id)
+        if not subs:
+            await interaction.response.edit_message(
+                embeds=[discord.Embed(
+                    title=f"📋 {assignment['week']}주차 — {assignment['title']} 제출 내역",
+                    description="아직 제출한 인원이 없습니다.",
+                    color=discord.Color.orange(),
+                )],
+                view=None,
+            )
+            return
+
+        view = SubmissionDetailView(assignment, subs)
+        await interaction.response.edit_message(embeds=view.build_embeds(), view=view)
+
+
 # ── Admin: Dashboard panel view (persistent) ──────────────────────────────────
 
 class AdminDashboardView(discord.ui.View):
@@ -244,10 +354,59 @@ class AdminDashboardView(discord.ui.View):
         await interaction.response.send_modal(CreateAssignmentModal(self.bot, "individual"))
 
     @discord.ui.button(
+        label="📋 제출 내역 보기",
+        style=discord.ButtonStyle.secondary,
+        custom_id="assignment:view_submissions",
+        row=0,
+    )
+    async def view_submissions(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        assignments = await database.get_assignments(active_only=False)
+        if not assignments:
+            await interaction.response.send_message(
+                embed=discord.Embed(description="등록된 과제가 없습니다.", color=discord.Color.orange()),
+                ephemeral=True,
+            )
+            return
+
+        if len(assignments) == 1:
+            assignment = assignments[0]
+            subs = await database.get_submissions(assignment["id"])
+            if not subs:
+                await interaction.response.send_message(
+                    embeds=[discord.Embed(
+                        title=f"📋 {assignment['week']}주차 — {assignment['title']} 제출 내역",
+                        description="아직 제출한 인원이 없습니다.",
+                        color=discord.Color.orange(),
+                    )],
+                    ephemeral=True,
+                )
+                return
+            view = SubmissionDetailView(assignment, subs)
+            await interaction.response.send_message(
+                embeds=view.build_embeds(), view=view, ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    title="📋 제출 내역 조회",
+                    description="내역을 볼 과제를 선택하세요.",
+                    color=discord.Color.from_str("#2B5CE6"),
+                ),
+                view=SubmissionAssignmentSelectView(self.bot, assignments),
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
         label="🔄 새로고침",
         style=discord.ButtonStyle.secondary,
         custom_id="assignment:dashboard:refresh",
-        row=0,
+        row=1,
     )
     async def refresh_btn(
         self, interaction: discord.Interaction, button: discord.ui.Button
