@@ -14,7 +14,7 @@ import database
 
 log = logging.getLogger("asanAX.onboarding")
 
-TEAMS = ["팀1", "팀2", "팀3", "팀4", "팀5", "팀6"]
+TEAMS = list(config.TEAM_CHANNELS.keys())  # 단일 출처: config.TEAM_CHANNELS
 
 
 # ── Embeds ─────────────────────────────────────────────────────────────────────
