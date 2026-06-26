@@ -789,10 +789,10 @@ class DynamicSubmitModal(discord.ui.Modal):
         field_names = _parse_fields(assignment.get("fields"))
         self._field_inputs: list[discord.ui.TextInput] = []
 
-        for i, name in enumerate(field_names):
+        for name in field_names:
             inp = discord.ui.TextInput(
                 label=name[:45],
-                style=discord.TextStyle.paragraph if i == 0 else discord.TextStyle.short,
+                style=discord.TextStyle.paragraph,  # 모든 내용 필드 여러 줄 입력 (Enter = 줄바꿈)
                 required=True,
                 max_length=500,
             )
