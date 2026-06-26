@@ -18,6 +18,7 @@ from discord.ext import commands, tasks
 
 import config
 import database
+from ui.embeds import fmt_kst, KST
 
 log = logging.getLogger("asanAX.assignment")
 
@@ -49,7 +50,7 @@ def _parse_fields(raw: str | None) -> list[str]:
 
 async def build_dashboard_embeds() -> list[discord.Embed]:
     assignments = await database.get_assignments(active_only=True)
-    now_str = discord.utils.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now_str = datetime.datetime.now(KST).strftime("%Y-%m-%d %H:%M KST")
 
     if not assignments:
         return [
@@ -236,7 +237,7 @@ async def build_excel(assignment_id: int | None = None) -> tuple[io.BytesIO, str
         ws = wb.create_sheet(title=sheet_name)
 
         # ── Header row ────────────────────────────────────────────────────────
-        headers = ["팀", "이름", *field_names, "링크", "제출 시각"]
+        headers = ["팀", "이름", *field_names, "링크", "제출 시각(KST)"]
         for col, h in enumerate(headers, start=1):
             cell = ws.cell(row=1, column=col, value=h)
             cell.font = header_font
@@ -261,7 +262,7 @@ async def build_excel(assignment_id: int | None = None) -> tuple[io.BytesIO, str
             for col_offset, fname in enumerate(field_names):
                 ws.cell(row=row_idx, column=3 + col_offset, value=fv.get(fname, ""))
             ws.cell(row=row_idx, column=3 + len(field_names), value=sub["link"] or "")
-            ws.cell(row=row_idx, column=4 + len(field_names), value=sub["submitted_at"])
+            ws.cell(row=row_idx, column=4 + len(field_names), value=fmt_kst(sub["submitted_at"], suffix=False))
 
         # ── Column widths ──────────────────────────────────────────────────────
         ws.column_dimensions["A"].width = 8   # 팀
@@ -284,7 +285,7 @@ async def build_excel(assignment_id: int | None = None) -> tuple[io.BytesIO, str
     wb.save(buf)
     buf.seek(0)
 
-    today = datetime.date.today().isoformat()
+    today = datetime.datetime.now(KST).date().isoformat()
     if assignment_id is not None and assignments:
         fname = f"과제_{assignments[0]['week']}주차_{today}.xlsx"
     else:
@@ -488,7 +489,7 @@ def _build_submission_page(assignment: dict, subs: list[dict], page: int, per_pa
             sub_embed.add_field(name=label, value=value[:512] or "—", inline=False)
         if sub["link"]:
             sub_embed.add_field(name="링크", value=sub["link"], inline=False)
-        sub_embed.set_footer(text=f"제출 시각: {sub['submitted_at']}")
+        sub_embed.set_footer(text=f"제출 시각: {fmt_kst(sub['submitted_at'])}")
         embeds.append(sub_embed)
 
     return embeds

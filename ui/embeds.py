@@ -1,6 +1,25 @@
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime, timedelta, timezone
 
 import discord
+
+
+KST = timezone(timedelta(hours=9))
+
+
+def fmt_kst(ts: str, suffix: bool = True) -> str:
+    """SQLite UTC 타임스탬프('YYYY-MM-DD HH:MM:SS')를 KST로 변환해 표시 문자열로 반환.
+
+    DB는 datetime('now')로 UTC를 저장하므로 표시 시점에 +9시간 보정한다.
+    파싱 실패 시 원본을 그대로 반환(안전장치).
+    """
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(ts).replace(tzinfo=timezone.utc)
+        out = dt.astimezone(KST).strftime("%Y-%m-%d %H:%M")
+        return f"{out} (KST)" if suffix else out
+    except (ValueError, TypeError):
+        return ts
 
 
 BRAND_COLOR = discord.Color.from_str("#2B5CE6")
@@ -251,7 +270,7 @@ def my_booking_embed(booking: dict, mentor: dict) -> discord.Embed:
     embed.add_field(name="멘토", value=mentor["name"], inline=True)
     embed.add_field(name="시간", value=booking["label"], inline=True)
     embed.add_field(name="상태", value=status_text, inline=True)
-    embed.add_field(name="신청 일시", value=booking["booked_at"], inline=False)
+    embed.add_field(name="신청 일시", value=fmt_kst(booking["booked_at"]), inline=False)
     embed.set_footer(text="/cancel 명령으로 취소할 수 있습니다 · 아산 AX 멘토링")
     return embed
 
