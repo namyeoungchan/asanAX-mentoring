@@ -24,6 +24,7 @@ COGS = [
     "cogs.onboarding",
     "cogs.qa",
     "cogs.assignment",
+    "cogs.participation",
 ]
 
 
