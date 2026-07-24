@@ -307,8 +307,8 @@ async def get_or_create_active_round(default_title: str = "팀원 상호평가")
 # 설계(UI/UX):
 #  - 허브(EvalHubView): 평가자가 돌아오는 홈. 진행률 바 + 팀원별 상태 버튼(✅/⬜).
 #    한 곳에서 남은 인원·진행률을 파악하고, 팀원을 눌러 채점 → 저장하면 허브로 복귀.
-#  - 채점(EvalScoreView): 한 화면에 4개 지표를 눈금 줄로 동시 배치(단일 화면 멀티 슬라이더).
-#    임베드에 4지표 채점 기준을 압축 표시해, 전체를 비교하며 조정하고 한 번에 저장.
+#  - 채점(EvalStepView): 지표별 스텝(1/4~4/4). 한 화면에 지표 1개 + 전체 채점 기준 + 눈금 1줄.
+#    눈금을 누르면 값 설정 후 다음 지표로 자동 진행 → 4개 후 검토 → 저장.
 #  - 눈금(단계형 슬라이더): 1~5 버튼. 선택 시 채워지고 임베드의 '현재' 표시가 갱신됨.
 
 NOTCH_EMOJI = {5: "🟢", 4: "🔵", 3: "🟡", 2: "🟠", 1: "🔴"}
@@ -324,7 +324,7 @@ def _score_bar(done: int, total: int, width: int = 8) -> str:
 class CommentModal(discord.ui.Modal, title="코멘트 입력"):
     """채점 화면에서 코멘트만 따로 입력받는 모달."""
 
-    def __init__(self, view: "EvalScoreView") -> None:
+    def __init__(self, view: "EvalStepView") -> None:
         super().__init__()
         self.view = view
         self._input = discord.ui.TextInput(
@@ -343,8 +343,9 @@ class CommentModal(discord.ui.Modal, title="코멘트 입력"):
         await interaction.response.edit_message(embed=self.view.embed(), view=self.view)
 
 
-class EvalScoreView(discord.ui.View):
-    """단일 화면 멀티 슬라이더 — 4개 지표를 한 화면에서 눈금으로 매기고 한 번에 저장."""
+class EvalStepView(discord.ui.View):
+    """지표별 스텝 채점 — 한 화면에 지표 1개 + 채점 기준 + 눈금 1줄.
+    눈금을 누르면 값이 정해지고 다음 지표로 자동 진행. 4개를 마치면 검토→저장."""
 
     def __init__(
         self,
@@ -369,86 +370,130 @@ class EvalScoreView(discord.ui.View):
             [existing[f"score{i + 1}"] for i in range(4)] if existing else [None, None, None, None]
         )
         self.comment: str = existing["comment"] if existing else ""
+        self.index = 0                # 0~3=지표 스텝, 4=검토
         self.build()
 
     # ── 렌더링 ──────────────────────────────────────────────────────────────
     def build(self) -> None:
         self.clear_items()
-        # 지표별 눈금 줄(row 0~3) — 각 줄 1~5 버튼
-        for i in range(4):
-            selected = self.scores[i]
+        if self.index < 4:
+            selected = self.scores[self.index]
+            # 눈금 한 줄(row 0) — 누르면 값 설정 + 자동 다음
             for value in (1, 2, 3, 4, 5):
                 btn = discord.ui.Button(
                     label=str(value),
                     emoji=NOTCH_EMOJI[value],
                     style=(discord.ButtonStyle.success if selected == value
                            else discord.ButtonStyle.secondary),
-                    row=i,
+                    row=0,
                 )
-                btn.callback = self._make_notch(i, value)
+                btn.callback = self._make_notch(value)
                 self.add_item(btn)
-        # 액션 줄(row 4)
-        comment_btn = discord.ui.Button(
-            label="💬 코멘트 " + ("수정" if self.comment else "입력"),
-            style=discord.ButtonStyle.secondary, row=4,
+            # 네비게이션(row 1)
+            back = discord.ui.Button(label="◀ 목록" if self.index == 0 else "◀ 이전",
+                                     style=discord.ButtonStyle.secondary, row=1)
+            back.callback = self._on_back
+            self.add_item(back)
+            if selected is not None:
+                skip = discord.ui.Button(
+                    label=("다음 ▶" if self.index < 3 else "검토 ▶"),
+                    style=discord.ButtonStyle.primary, row=1,
+                )
+                skip.callback = self._on_next
+                self.add_item(skip)
+        else:
+            comment_btn = discord.ui.Button(
+                label="💬 코멘트 " + ("수정" if self.comment else "입력"),
+                style=discord.ButtonStyle.secondary, row=0,
+            )
+            comment_btn.callback = self._on_comment
+            self.add_item(comment_btn)
+            save = discord.ui.Button(label="✅ 저장", style=discord.ButtonStyle.success, row=0)
+            save.callback = self._on_save
+            self.add_item(save)
+            back = discord.ui.Button(label="◀ 이전", style=discord.ButtonStyle.secondary, row=1)
+            back.callback = self._on_back
+            self.add_item(back)
+
+    def _dots(self) -> str:
+        return " ".join(
+            (NOTCH_EMOJI[self.scores[i]] if self.scores[i] is not None else "⚪")
+            for i in range(4)
         )
-        comment_btn.callback = self._on_comment
-        self.add_item(comment_btn)
-        save = discord.ui.Button(label="✅ 저장", style=discord.ButtonStyle.success, row=4)
-        save.callback = self._on_save
-        self.add_item(save)
-        back = discord.ui.Button(label="◀ 목록", style=discord.ButtonStyle.secondary, row=4)
-        back.callback = self._on_back
-        self.add_item(back)
 
     def embed(self) -> discord.Embed:
         prefix = "🧪 [테스트] " if self.test else ""
-        filled = sum(1 for s in self.scores if s is not None)
-        e = discord.Embed(
-            title=f"{prefix}{self.target.display_name} 평가 · {self.team}",
-            description=(
-                "각 지표의 눈금(1~5)을 눌러 점수를 매기고 **[✅ 저장]** 을 누르세요.\n"
-                f"입력 {filled}/4 · **비밀평가** — 누가 줬는지는 공개되지 않습니다."
-            ),
-            color=discord.Color.from_str(ACCENT),
-        )
-        for i, (mark, name, _basis, anchors) in enumerate(INDICATORS):
-            sel = self.scores[i]
-            cur = f"{NOTCH_EMOJI[sel]} **{sel}점**" if sel is not None else "_미선택_"
+        if self.index < 4:
+            mark, name, basis, anchors = INDICATORS[self.index]
+            sel = self.scores[self.index]
+            e = discord.Embed(
+                title=f"{prefix}[{self.index + 1}/4] {mark} {name}",
+                description=(
+                    f"**{self.target.display_name}** 평가 · {self.team}\n"
+                    f"**무엇을 보는가** — {basis}"
+                ),
+                color=discord.Color.from_str(ACCENT),
+            )
             e.add_field(
-                name=f"{mark} {name}",
+                name="채점 기준 (아래 눈금을 눌러 선택 · 4·2점은 중간)",
                 value=(
-                    f"🟢5 {anchors[0]}\n"
-                    f"🟡3 {anchors[1]}\n"
-                    f"🔴1 {anchors[2]}\n"
-                    f"▸ 현재: {cur}"
+                    f"🟢 **5점 · 우수** — {anchors[0]}\n"
+                    f"🟡 **3점 · 보통** — {anchors[1]}\n"
+                    f"🔴 **1점 · 미흡** — {anchors[2]}"
                 )[:1024],
                 inline=False,
             )
-        e.set_footer(text="저장을 눌러야 기록됩니다 · [◀ 목록]으로 나가면 이 화면 입력은 사라집니다")
-        return e
+            cur = f"{NOTCH_EMOJI[sel]} **{sel}점**" if sel is not None else "_미선택_"
+            e.set_footer(text=f"진행 {self._dots()}  ·  현재 선택: {sel if sel else '—'}")
+            return e
+        else:
+            avg = sum(s for s in self.scores if s is not None) / 4
+            lines = [f"{INDICATORS[i][0]} **{INDICATORS[i][1]}** — {NOTCH_EMOJI[self.scores[i]]} {self.scores[i]}점"
+                     for i in range(4)]
+            e = discord.Embed(
+                title=f"{prefix}검토 — {self.target.display_name}",
+                description="점수를 확인하고 **[✅ 저장]** 하세요. `◀ 이전`으로 수정할 수 있습니다.",
+                color=discord.Color.from_str(ACCENT),
+            )
+            e.add_field(name=f"입력한 점수 (평균 {avg:.1f})", value="\n".join(lines), inline=False)
+            if self.comment:
+                e.add_field(name="코멘트", value=self.comment[:1024], inline=False)
+            return e
+
+    async def _rerender(self, interaction: discord.Interaction) -> None:
+        self.build()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
 
     # ── 콜백 ────────────────────────────────────────────────────────────────
-    def _make_notch(self, index: int, value: int):
+    def _make_notch(self, value: int):
         async def callback(interaction: discord.Interaction) -> None:
-            self.scores[index] = value
-            self.build()
-            await interaction.response.edit_message(embed=self.embed(), view=self)
+            self.scores[self.index] = value
+            self.index += 1                 # 값 설정 후 다음 지표로 자동 진행
+            await self._rerender(interaction)
         return callback
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        if self.scores[self.index] is None:
+            await interaction.response.send_message("눈금을 눌러 점수를 선택해주세요.", ephemeral=True)
+            return
+        self.index += 1
+        await self._rerender(interaction)
+
+    async def _on_back(self, interaction: discord.Interaction) -> None:
+        if self.index == 0:
+            # 첫 스텝에서 뒤로 = 허브(목록)로
+            await render_hub(interaction, self.bot, self.round_id, self.team,
+                             self.member, self.teammates, self.test, edit=True)
+            return
+        self.index -= 1
+        await self._rerender(interaction)
 
     async def _on_comment(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(CommentModal(self))
 
-    async def _on_back(self, interaction: discord.Interaction) -> None:
-        await render_hub(interaction, self.bot, self.round_id, self.team,
-                         self.member, self.teammates, self.test, edit=True)
-
     async def _on_save(self, interaction: discord.Interaction) -> None:
-        missing = [INDICATORS[i][1] for i in range(4) if self.scores[i] is None]
-        if missing:
-            await interaction.response.send_message(
-                "아직 선택하지 않은 지표가 있습니다: **" + ", ".join(missing) + "**", ephemeral=True
-            )
+        if any(s is None for s in self.scores):
+            await interaction.response.send_message("모든 지표를 선택한 뒤 저장해주세요.", ephemeral=True)
             return
         scores = (self.scores[0], self.scores[1], self.scores[2], self.scores[3])
 
@@ -575,8 +620,8 @@ class EvalHubView(discord.ui.View):
                  if e["evaluator_id"] == str(interaction.user.id) and e["target_id"] == target_id),
                 None,
             )
-        view = EvalScoreView(self.bot, self.round_id, self.team, self.member,
-                             target, self.teammates, existing, self.test)
+        view = EvalStepView(self.bot, self.round_id, self.team, self.member,
+                            target, self.teammates, existing, self.test)
         await interaction.response.edit_message(embed=view.embed(), view=view)
 
     def _make_target(self, target_id: str):
