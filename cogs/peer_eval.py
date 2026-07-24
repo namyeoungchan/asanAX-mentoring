@@ -352,34 +352,37 @@ class EvalFlowView(discord.ui.View):
         self.index = 0
         self.build()
 
+    # 눈금별 이모지 (단계형 슬라이더 트랙)
+    NOTCH_EMOJI = {5: "🟢", 4: "🔵", 3: "🟡", 2: "🟠", 1: "🔴"}
+
     # ── 렌더링 ──────────────────────────────────────────────────────────────
     def build(self) -> None:
         self.clear_items()
         if self.index < 4:
-            _mark, name, _basis, anchors = INDICATORS[self.index]
-            labels = [
-                ("5", "5점 · 우수", anchors[0]),
-                ("4", "4점 · 우수와 보통 사이", "중간 수준"),
-                ("3", "3점 · 보통", anchors[1]),
-                ("2", "2점 · 보통과 미흡 사이", "중간 수준"),
-                ("1", "1점 · 미흡", anchors[2]),
-            ]
-            opts = []
-            for value, label, desc in labels:
-                opt = discord.SelectOption(label=label, value=value, description=desc[:100])
-                if self.scores[self.index] == int(value):
-                    opt.default = True
-                opts.append(opt)
-            sel = discord.ui.Select(
-                placeholder=f"{name} 점수를 선택하세요",
-                min_values=1, max_values=1, options=opts, row=0,
-            )
-            sel.callback = self._on_score
-            self.add_item(sel)
+            selected = self.scores[self.index]
+            # row 0: 1~5 눈금 버튼(단계형 슬라이더). 선택된 눈금은 채워짐(success)
+            for value in (1, 2, 3, 4, 5):
+                btn = discord.ui.Button(
+                    label=str(value),
+                    emoji=self.NOTCH_EMOJI[value],
+                    style=(discord.ButtonStyle.success if selected == value
+                           else discord.ButtonStyle.secondary),
+                    row=0,
+                )
+                btn.callback = self._make_notch(value)
+                self.add_item(btn)
+            # row 1: 이전 / 다음 네비게이션
             if self.index > 0:
                 back = discord.ui.Button(label="◀ 이전", style=discord.ButtonStyle.secondary, row=1)
                 back.callback = self._on_back
                 self.add_item(back)
+            if selected is not None:
+                nxt = discord.ui.Button(
+                    label=("다음 ▶" if self.index < 3 else "검토 ▶"),
+                    style=discord.ButtonStyle.primary, row=1,
+                )
+                nxt.callback = self._on_next
+                self.add_item(nxt)
         else:
             comment_btn = discord.ui.Button(
                 label="💬 코멘트 " + ("수정" if self.comment else "입력"),
@@ -416,6 +419,11 @@ class EvalFlowView(discord.ui.View):
                 )[:1024],
                 inline=False,
             )
+            e.add_field(
+                name="점수 눈금",
+                value=self._gauge(self.scores[self.index]),
+                inline=False,
+            )
             e.set_footer(text=f"대상: {self.target.display_name} · 진행 {chosen}")
         else:
             avg = sum(s for s in self.scores if s is not None) / 4
@@ -430,13 +438,32 @@ class EvalFlowView(discord.ui.View):
                 e.add_field(name="코멘트", value=self.comment[:1024], inline=False)
         return e
 
+    def _gauge(self, selected: int | None) -> str:
+        """단계형 슬라이더 게이지. 선택 눈금에 마커[ ] 표시."""
+        cells = []
+        for v in (1, 2, 3, 4, 5):
+            token = f"{self.NOTCH_EMOJI[v]}{v}"
+            cells.append(f"【{token}】" if selected == v else token)
+        track = " ─ ".join(cells)
+        tail = f"  →  **{selected}점**" if selected is not None else "  →  _눈금을 눌러 점수를 선택하세요_"
+        return track + tail
+
     async def _rerender(self, interaction: discord.Interaction) -> None:
         self.build()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
     # ── 콜백 ────────────────────────────────────────────────────────────────
-    async def _on_score(self, interaction: discord.Interaction) -> None:
-        self.scores[self.index] = int(interaction.data["values"][0])  # type: ignore[index]
+    def _make_notch(self, value: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            # 눈금 선택 — 값만 설정하고 같은 스텝을 다시 그려 트랙이 채워지는 것을 보여줌
+            self.scores[self.index] = value
+            await self._rerender(interaction)
+        return callback
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        if self.scores[self.index] is None:
+            await interaction.response.send_message("눈금을 눌러 점수를 선택해주세요.", ephemeral=True)
+            return
         self.index += 1
         await self._rerender(interaction)
 
