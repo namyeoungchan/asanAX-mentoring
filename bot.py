@@ -25,6 +25,7 @@ COGS = [
     "cogs.qa",
     "cogs.assignment",
     "cogs.participation",
+    "cogs.peer_eval",
 ]
 
 

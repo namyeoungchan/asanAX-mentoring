@@ -116,6 +116,32 @@ async def init_db() -> None:
                 sent_at       TEXT    NOT NULL DEFAULT (datetime('now')),
                 UNIQUE(assignment_id, team)
             );
+
+            -- 팀원 비밀평가(동료평가) 1회성 라운드
+            CREATE TABLE IF NOT EXISTS peer_eval_rounds (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                title       TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                is_active   INTEGER NOT NULL DEFAULT 1
+            );
+
+            -- 개별 평가 기록. evaluator_id는 중복방지·진행률 계산 용도로만 저장하며
+            -- 집계 결과에는 절대 노출하지 않는다(비밀평가).
+            CREATE TABLE IF NOT EXISTS peer_evaluations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                round_id      INTEGER NOT NULL REFERENCES peer_eval_rounds(id) ON DELETE CASCADE,
+                team          TEXT    NOT NULL,
+                evaluator_id  TEXT    NOT NULL,
+                target_id     TEXT    NOT NULL,
+                target_name   TEXT    NOT NULL,
+                score1        INTEGER NOT NULL,  -- ① 과업 완수(산출물)
+                score2        INTEGER NOT NULL,  -- ② 협업·소통
+                score3        INTEGER NOT NULL,  -- ③ 책임·약속 이행
+                score4        INTEGER NOT NULL,  -- ④ 팀 기여·문제해결
+                comment       TEXT    NOT NULL DEFAULT '',
+                submitted_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(round_id, evaluator_id, target_id)
+            );
         """)
         await db.commit()
         # Migration: add status / rejection_reason columns if missing
@@ -894,3 +920,97 @@ async def get_assignment_panel(panel_type: str) -> dict | None:
         ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
+
+
+# ── Peer evaluation (팀원 비밀평가) helpers ─────────────────────────────────────
+
+async def create_peer_round(title: str) -> int:
+    """새 비밀평가 라운드를 생성. 기존 활성 라운드는 모두 비활성화(1회성 단일 라운드)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE peer_eval_rounds SET is_active = 0 WHERE is_active = 1")
+        cur = await db.execute(
+            "INSERT INTO peer_eval_rounds (title) VALUES (?)", (title,)
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def get_active_peer_round() -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM peer_eval_rounds WHERE is_active = 1 ORDER BY id DESC LIMIT 1"
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def get_peer_round(round_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM peer_eval_rounds WHERE id = ?", (round_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def close_peer_round(round_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE peer_eval_rounds SET is_active = 0 WHERE id = ?", (round_id,)
+        )
+        await db.commit()
+
+
+async def save_peer_evaluation(
+    round_id: int,
+    team: str,
+    evaluator_id: str,
+    target_id: str,
+    target_name: str,
+    scores: tuple[int, int, int, int],
+    comment: str = "",
+) -> None:
+    """평가 저장(upsert). 같은 평가자→대상자는 최신 값으로 갱신(수정 허용)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO peer_evaluations
+                 (round_id, team, evaluator_id, target_id, target_name,
+                  score1, score2, score3, score4, comment)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(round_id, evaluator_id, target_id) DO UPDATE SET
+                 team = excluded.team,
+                 target_name = excluded.target_name,
+                 score1 = excluded.score1,
+                 score2 = excluded.score2,
+                 score3 = excluded.score3,
+                 score4 = excluded.score4,
+                 comment = excluded.comment,
+                 submitted_at = datetime('now')""",
+            (
+                round_id, team, evaluator_id, target_id, target_name,
+                scores[0], scores[1], scores[2], scores[3], comment,
+            ),
+        )
+        await db.commit()
+
+
+async def get_peer_evaluations(round_id: int) -> list[dict]:
+    """라운드의 모든 평가 기록. 진행률·집계 양쪽에서 사용."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM peer_evaluations WHERE round_id = ?", (round_id,)
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_evaluated_target_ids(round_id: int, evaluator_id: str) -> set[str]:
+    """특정 평가자가 이미 평가를 마친 대상자 ID 집합."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT target_id FROM peer_evaluations WHERE round_id = ? AND evaluator_id = ?",
+            (round_id, evaluator_id),
+        ) as cur:
+            return {row[0] for row in await cur.fetchall()}

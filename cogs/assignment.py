@@ -774,6 +774,21 @@ class AdminDashboardView(discord.ui.View):
         await refresh_dashboard(self.bot)
         await interaction.followup.send("✅ 대시보드가 새로고침되었습니다.", ephemeral=True)
 
+    @discord.ui.button(
+        label="🔒 비밀평가 게시",
+        style=discord.ButtonStyle.secondary,
+        custom_id="assignment:peer_eval",
+        row=2,
+    )
+    async def peer_eval(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        from cogs.peer_eval import open_admin_panel  # 지연 임포트로 순환 참조 방지
+        await open_admin_panel(interaction, self.bot)
+
 
 # ── Student: Dynamic submit modal ─────────────────────────────────────────────
 
